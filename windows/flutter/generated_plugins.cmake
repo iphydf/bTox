@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  sodium_libs
   sqlite3_flutter_libs
 )
 

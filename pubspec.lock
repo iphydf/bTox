@@ -190,6 +190,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.6"
+  csslib:
+    dependency: transitive
+    description:
+      name: csslib
+      sha256: "09bad715f418841f976c77db72d5398dc1253c21fb9c0c7f0b0b985860b2d58e"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.2"
   cupertino_icons:
     dependency: "direct main"
     description:
@@ -280,6 +288,19 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_web_plugins:
+    dependency: transitive
+    description: flutter
+    source: sdk
+    version: "0.0.0"
+  freezed_annotation:
+    dependency: transitive
+    description:
+      name: freezed_annotation
+      sha256: c2e2d632dd9b8a2b7751117abcfc2b4888ecfe181bd9fca7170d9ef02e595fe2
+      url: "https://pub.dev"
+    source: hosted
+    version: "2.4.4"
   frontend_server_client:
     dependency: transitive
     description:
@@ -304,6 +325,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.2"
+  html:
+    dependency: transitive
+    description:
+      name: html
+      sha256: "1fc58edeaec4307368c60d59b7e15b9d658b57d7f3125098b6294153c75337ec"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.15.5"
   http_multi_server:
     dependency: transitive
     description:
@@ -565,6 +594,22 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.99"
+  sodium:
+    dependency: "direct main"
+    description:
+      name: sodium
+      sha256: "738cf31c29f839e3bbad5ff4b3a3ab49dbdd33c2564c0566ca0c195194a135a4"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.4.0"
+  sodium_libs:
+    dependency: "direct main"
+    description:
+      name: sodium_libs
+      sha256: "88e6f8002988222e5baef6e8db1fae5b442dedf051c4bc9049f2e2fa79ddca31"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.3.0+1"
   source_gen:
     dependency: transitive
     description:
@@ -637,6 +682,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.2.0"
+  synchronized:
+    dependency: transitive
+    description:
+      name: synchronized
+      sha256: "69fe30f3a8b04a0be0c15ae6490fc859a78ef4c43ae2dd5e8a623d45bfcf9225"
+      url: "https://pub.dev"
+    source: hosted
+    version: "3.3.0+3"
   term_glyph:
     dependency: transitive
     description:
@@ -669,6 +722,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
+  udp:
+    dependency: "direct main"
+    description:
+      name: udp
+      sha256: "50ea45d7ee80ad4c62de4ec0e8ed3ae65c36e9fe8cd0655a2bcd1503d2708e5a"
+      url: "https://pub.dev"
+    source: hosted
+    version: "5.0.3"
   vector_math:
     dependency: transitive
     description:
@@ -710,7 +771,7 @@ packages:
     source: hosted
     version: "0.1.6"
   web_socket_channel:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: web_socket_channel
       sha256: "9f187088ed104edd8662ca07af4b124465893caf063ba29758f97af57e61da8f"

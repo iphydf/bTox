@@ -2,6 +2,7 @@ import 'package:btox/add_contact_page.dart';
 import 'package:btox/btox_state.dart';
 import 'package:btox/chat_page.dart';
 import 'package:btox/db/database.dart';
+import 'package:btox/net/dht.dart';
 import 'package:btox/profile.dart';
 import 'package:btox/settings.dart';
 import 'package:btox/strings.dart';
@@ -33,11 +34,13 @@ final class ContactListItem extends StatelessWidget {
 final class ContactListPage extends StatelessWidget {
   final String title;
   final Database database;
+  final Dht dht;
 
   const ContactListPage({
     super.key,
     required this.title,
     required this.database,
+    required this.dht,
   });
 
   @override
