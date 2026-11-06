@@ -1,9 +1,7 @@
-import 'package:btox/api/toxcore/tox.dart';
-import 'package:btox/ffi/tox_library.dart';
-import 'package:btox/ffi/toxcore.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
 import 'package:btox/logger.dart';
 import 'package:btox/providers/database.dart';
+import 'package:btox/providers/tox_library.dart';
 import 'package:btox/services/backup.dart';
 import 'package:btox/services/profile_import.dart';
 import 'package:btox/widgets/account_picker.dart';
@@ -11,6 +9,8 @@ import 'package:btox/widgets/passphrase_dialog.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:toxcore/ffi/toxcore.dart';
+import 'package:toxcore/tox.dart';
 
 const _logger = Logger(['ImportProfile']);
 

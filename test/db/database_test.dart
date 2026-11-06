@@ -2,8 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/messages/split_message.dart';
 import 'package:btox/models/content.dart';
 import 'package:btox/models/crypto.dart';
@@ -14,10 +13,7 @@ import 'package:btox/sync/fact.dart';
 import 'package:btox/sync/home.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import '../mocks/fake_message_format.dart';
-
-final _bob = PublicKey(Uint8List(32)..[0] = 1);
+import 'package:toxcore/tox.dart';
 
 void main() {
   late Database db;
@@ -224,7 +220,7 @@ void main() {
           Received(
             sender: sender,
             message: utf8.encode('hi'),
-            kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+            kind: MessageType.normal,
           ),
         ))!;
         await pumpEventQueue();
@@ -256,52 +252,6 @@ void main() {
       ]);
     });
 
-    test('a message sent again counts once, also when the first comes '
-        'later', () async {
-      final id = await db.addProfile(
-        ProfilesCompanion.insert(
-          settings: const ProfileSettings(nickname: 'Me', statusMessage: ''),
-          secretKey: SecretKey(Uint8List(32)),
-          publicKey: PublicKey(Uint8List(32)),
-          nospam: ToxAddressNospam(0),
-        ),
-      );
-      final chat = GraphId.friend(PublicKey(Uint8List(32)), _bob);
-      NewEvent received(int rank, String text) {
-        final event = SyncEvent(
-          graph: chat,
-          author: PublicKey(Uint8List(32)),
-          parents: const [],
-          rank: rank,
-          time: rank,
-          content: Received(
-            sender: 'Bob',
-            message: FakeMessageFormat.encode(text, '1'),
-            kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-          ),
-        );
-        final bytes = event.encode();
-        return (EventId.of(bytes), event, bytes);
-      }
-
-      final ranks = <List<int>?>[];
-      final watching = db
-          .watchReceivedRanks(id, withFakeFormat)
-          .listen((received) => ranks.add(received[chat]));
-      await pumpEventQueue();
-      await db.addSyncEvents(id, [received(5, 'again')]);
-      await pumpEventQueue();
-      // As when older history comes after.
-      await db.addSyncEvents(id, [received(2, 'first')]);
-      await pumpEventQueue();
-      await watching.cancel();
-      expect(ranks, [
-        null,
-        [5],
-        [2],
-      ]);
-    });
-
     test('each chat shows its latest entry', () async {
       final id = await db.addProfile(
         ProfilesCompanion.insert(
@@ -314,7 +264,7 @@ void main() {
       final home = await Home.load(db, await db.watchProfile(id).first);
       final alice = home.chatWith(PublicKey(Uint8List(32)..[0] = 1));
       final bob = home.chatWith(PublicKey(Uint8List(32)..[0] = 2));
-      const kind = Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL;
+      const kind = MessageType.normal;
       await home.record(
         alice,
         Received(sender: 'Alice', message: utf8.encode('first'), kind: kind),
@@ -330,7 +280,7 @@ void main() {
       );
       Future<Map<GraphId, String>> latest() async => {
         for (final MapEntry(:key, :value)
-            in (await db.watchLatestEntries(id, MessageFormats.none).first)
+            in (await db.watchLatestEntries(id, MessageTexts.plain).first)
                 .entries)
           key: value.content.plainText,
       };
@@ -358,7 +308,7 @@ void main() {
           content: Received(
             sender: 'Bob',
             message: utf8.encode(text),
-            kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+            kind: MessageType.normal,
           ),
         );
         final bytes = event.encode();
@@ -371,7 +321,7 @@ void main() {
       final b = event('b', 1, 150);
       await db.addSyncEvents(id, [parent, a, b]);
 
-      final latest = await db.watchLatestEntries(id, MessageFormats.none).first;
+      final latest = await db.watchLatestEntries(id, MessageTexts.plain).first;
       expect(latest[chat]?.content.plainText, 'a');
     });
 

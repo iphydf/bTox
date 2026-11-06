@@ -5,6 +5,7 @@ import 'package:btox/sync/codec.dart';
 import 'package:btox/sync/fact.dart';
 import 'package:btox/sync/frames.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:toxcore/tox.dart' show FileKind;
 
 part 'session_message.freezed.dart';
 
@@ -25,7 +26,7 @@ const _callConnect = 0;
 const _callHangUp = 1;
 
 /// The Tox file kind blobs are sent as. It reuses the sync packet ID.
-const blobFileKind = syncPacketId;
+const blobFileKind = FileKind(syncPacketId);
 
 /// What a device offers, sent in [Hello]. Unknown bits are kept, so a newer
 /// device's features pass through unharmed.

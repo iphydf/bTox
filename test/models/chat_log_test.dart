@@ -1,16 +1,17 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/l10n/generated/app_localizations.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/content.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/persistence.dart' show FileState;
 import 'package:btox/sync/event.dart';
+import 'package:btox/sync/fact.dart';
+import 'package:flutter/widgets.dart' show Locale;
 import 'package:flutter_test/flutter_test.dart';
-
-import '../mocks/fake_message_format.dart';
+import 'package:toxcore/tox.dart';
 
 final _home = PublicKey(Uint8List(32)..fillRange(0, 32, 1));
 final _carol = PublicKey(Uint8List(32)..fillRange(0, 32, 3));
@@ -37,7 +38,7 @@ Received _received(Uint8List message, {PublicKey? from}) => Received(
   from: from,
   sender: 'Bob',
   message: message,
-  kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+  kind: MessageType.normal,
 );
 
 List<String> _texts(ChatLog log, List<(EventId, SyncEvent)> events) => [
@@ -49,14 +50,11 @@ void main() {
     final send = _event(
       0,
       50,
-      Send(
-        sender: 'Me',
-        message: utf8.encode('hi'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-      ),
+      Send(sender: 'Me', message: utf8.encode('hi'), kind: MessageType.normal),
     );
-    final [entry] = ChatLog(MessageFormats.none)
-        .update([send, _event(1, 70, Delivered(intent: send.$1))]);
+    final [entry] = ChatLog(
+      MessageTexts.plain,
+    ).update([send, _event(1, 70, Delivered(intent: send.$1))]);
     expect(
       entry.delivered,
       DateTime.fromMillisecondsSinceEpoch(70, isUtc: true),
@@ -67,11 +65,7 @@ void main() {
     final send = _event(
       0,
       50,
-      Send(
-        sender: 'Me',
-        message: utf8.encode('hi'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-      ),
+      Send(sender: 'Me', message: utf8.encode('hi'), kind: MessageType.normal),
     );
     final events = [
       send,
@@ -81,10 +75,10 @@ void main() {
       _event(3, 80, _received(utf8.encode('newest'))),
       _event(3, 10, _received(utf8.encode('slow')), [send.$1]),
     ];
-    final log = ChatLog(MessageFormats.none);
+    final log = ChatLog(MessageTexts.plain);
     for (var i = 1; i <= events.length; i++) {
       final prefix = events.sublist(0, i);
-      expect(log.update(prefix), ChatLog(MessageFormats.none).update(prefix));
+      expect(log.update(prefix), ChatLog(MessageTexts.plain).update(prefix));
     }
     // Later events placed by the effective time of earlier ones: these two
     // tie at 50, so their IDs order them, not their own times.
@@ -99,7 +93,7 @@ void main() {
       }
     }
     final later = [...events, ...tied];
-    expect(log.update(later), ChatLog(MessageFormats.none).update(later));
+    expect(log.update(later), ChatLog(MessageTexts.plain).update(later));
 
     // Older history arriving later, and events going away.
     final older = _event(0, 0, const Notice(text: 'older'));
@@ -107,9 +101,9 @@ void main() {
       [older, ...events],
       events.sublist(1),
     ]) {
-      expect(log.update(next), ChatLog(MessageFormats.none).update(next));
+      expect(log.update(next), ChatLog(MessageTexts.plain).update(next));
     }
-    expect(_texts(ChatLog(MessageFormats.none), events), [
+    expect(_texts(ChatLog(MessageTexts.plain), events), [
       'hi',
       'late clock',
       'Bob joined',
@@ -118,48 +112,59 @@ void main() {
     ]);
   });
 
+  test('shows what /me sends as an action', () {
+    final [entry] = ChatLog(MessageTexts.plain).update([
+      _event(
+        0,
+        50,
+        Received(
+          from: null,
+          sender: 'Bob',
+          message: utf8.encode('waves'),
+          kind: MessageType.action,
+        ),
+      ),
+    ]);
+    expect(
+      (entry.action, entry.content),
+      (true, const TextContent(text: 'waves')),
+    );
+  });
+
   test('shows geo text as a location', () {
     final events = [_event(0, 0, _received(utf8.encode('geo:-33.9,18.4')))];
     expect(
-      ChatLog(MessageFormats.none).update(events).single.content,
+      ChatLog(MessageTexts.plain).update(events).single.content,
       const LocationContent(latitude: -33.9, longitude: 18.4),
     );
   });
 
-  test('reads friends\' messages in the formats turned on', () {
-    final events = [
-      _event(0, 0, _received(FakeMessageFormat.encode('hi', '7'))),
-      _event(1, 1, _received(FakeMessageFormat.encode('hi', '7'))),
-      _event(2, 2, _received(FakeMessageFormat.encode('again', '8'))),
-      _event(
-        3,
-        3,
-        _received(FakeMessageFormat.encode('in a group', '7'), from: _carol),
-      ),
-    ];
-    final raw = [
-      for (final (_, event) in events)
-        utf8.decode((event.content as Received).message, allowMalformed: true),
-    ];
-    // Sent again with the same key, a message shows once.
-    expect(_texts(ChatLog(withFakeFormat), events), ['hi', 'again', raw[3]]);
-    // Ours are plain text, whatever they look like.
-    final ours = _event(
-      4,
-      4,
-      Send(
-        sender: 'Me',
-        message: FakeMessageFormat.encode('mine', '9'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-      ),
-    );
-    expect(_texts(ChatLog(withFakeFormat), [ours]), ['mine#9']);
-    expect(_texts(ChatLog(MessageFormats.none), events), raw);
-  });
+  test(
+    'shows a zero byte, or in chats that hide it what follows as its size',
+    () {
+      final extra = Uint8List.fromList([...utf8.encode('hi'), 0, 7, 0xff, 0]);
+      final events = [
+        _event(0, 0, _received(extra)),
+        _event(
+          1,
+          1,
+          Send(sender: 'Me', message: extra, kind: MessageType.normal),
+        ),
+      ];
+      expect(_texts(ChatLog(MessageTexts.plain), events), [
+        'hi\\0\u0007\ufffd\\0',
+        'hi\\0\u0007\ufffd\\0',
+      ]);
+      expect(_texts(ChatLog(MessageTexts({_graph})), events), [
+        'hi\\0[5 bytes]',
+        'hi\\0[5 bytes]',
+      ]);
+    },
+  );
 
   test('shows how far files offered to the home device got', () {
     FileState? stateOf(List<(EventId, SyncEvent)> events) =>
-        ChatLog(MessageFormats.none).update(events).single.file?.state;
+        ChatLog(MessageTexts.plain).update(events).single.file?.state;
     final offer = _event(
       0,
       0,
@@ -192,7 +197,7 @@ void main() {
       const Call(sender: 'Bob', incoming: true, video: false),
     );
     CallContent shown(List<(EventId, SyncEvent)> events) =>
-        ChatLog(MessageFormats.none).update(events).single.content
+        ChatLog(MessageTexts.plain).update(events).single.content
             as CallContent;
 
     expect(shown([call]), const CallContent(incoming: true));
@@ -209,5 +214,37 @@ void main() {
       call.$1,
     ]);
     expect(shown([call, declined]).missed, isFalse);
+  });
+
+  test('words what happened in a chat in the reader\'s language', () {
+    final events = [
+      _event(0, 10, PeerJoined(peer: _carol, name: 'Carol')),
+      _event(1, 20, Moderated(name: 'Bob', peer: _carol, peerName: 'Carol')),
+      _event(
+        2,
+        30,
+        Moderated(name: '', peerName: 'Carol', role: Role.moderator),
+      ),
+      // Nameless, by the start of their key.
+      _event(3, 40, PeerLeft(peer: _carol, name: '')),
+    ];
+    final entries = ChatLog(MessageTexts.plain).update(events);
+    expect(entries.every((e) => e.notice), isTrue);
+    expect(
+      [
+        for (final e in entries)
+          noticeText(lookupAppLocalizations(const Locale('en')), e),
+      ],
+      [
+        'Carol joined',
+        'Bob removed Carol',
+        'Carol is now a moderator',
+        '${_carol.toJson().substring(0, 8)} left',
+      ],
+    );
+    expect(
+      noticeText(lookupAppLocalizations(const Locale('de')), entries[1]),
+      'Bob hat Carol entfernt',
+    );
   });
 }

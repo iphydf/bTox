@@ -1,5 +1,4 @@
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/chat_view.dart';
 import 'package:btox/models/content.dart';
@@ -7,6 +6,7 @@ import 'package:btox/models/crypto.dart';
 import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:toxcore/tox.dart';
 
 part 'chat_merge.freezed.dart';
 
@@ -117,22 +117,19 @@ RelayedNames? relayedNames(
 }
 
 /// [event] as a bot would relay it, to match it with its copy.
-(Tox_Message_Type, String)? _said(
-  SyncEvent event,
-  Set<PublicKey> bots,
-  MessageFormats formats,
-) => switch (event.content) {
-  Received(from: final from?, :final sender, :final message, :final kind) =>
-    switch (formats.read(message, friend: false).text) {
-      final text when bots.contains(from) => (kind, text),
-      final text => (kind, '<$sender> $text'),
-    },
-  Send(:final sender, :final message, :final kind) => (
-    kind,
-    '<$sender> ${plainText(message)}',
-  ),
-  _ => null,
-};
+(MessageType, String)? _said(SyncEvent event, Set<PublicKey> bots) =>
+    switch (event.content) {
+      Received(from: final from?, :final sender, :final message, :final kind) =>
+        switch (plainText(message)) {
+          final text when bots.contains(from) => (kind, text),
+          final text => (kind, '<$sender> $text'),
+        },
+      Send(:final sender, :final message, :final kind) => (
+        kind,
+        '<$sender> ${plainText(message)}',
+      ),
+      _ => null,
+    };
 
 Iterable<String> _speakersOf(
   Iterable<(EventId, SyncEvent)> events,
@@ -154,7 +151,7 @@ typedef _Said = ({
   int side,
   EventId id,
   int time,
-  (Tox_Message_Type, String) said,
+  (MessageType, String) said,
   bool copy,
 });
 
@@ -162,17 +159,14 @@ typedef _Said = ({
 /// even where clocks put it first, or the second of two copies. One older
 /// than the last starts over.
 final class Echoes {
-  final MessageFormats _formats;
   ChatMerge? _merge;
   final _seen = <EventId>{};
-  final _waiting = <(Tox_Message_Type, String), List<_Said>>{};
+  final _waiting = <(MessageType, String), List<_Said>>{};
   final _repeats = <EventId>{};
   // When the home device sent messages written offline, so when their copies
   // come.
   final _sentAt = <EventId, int>{};
   _Said? _last;
-
-  Echoes(this._formats);
 
   Set<EventId> update(
     ChatMerge merge,
@@ -225,7 +219,7 @@ final class Echoes {
         }
         if (event.content case Sent(:final intent)) {
           _sentAt[intent] = event.time;
-        } else if (_said(event, bots, _formats) case final message?) {
+        } else if (_said(event, bots) case final message?) {
           said.add((
             side: side,
             id: id,
@@ -273,9 +267,9 @@ int unreadIn(List<MergedEntry> entries, Map<GraphId, (int, EventId)> read) =>
 /// The entries of a merge by time, relayed messages shown as their senders',
 /// without [Echoes].
 final class MergedLog {
-  final MessageFormats _formats;
+  final MessageTexts _texts;
   final _logs = <GraphId, ChatLog>{};
-  late final _echoes = Echoes(_formats);
+  final _echoes = Echoes();
   ChatMerge? _merge;
   // The names that speak other than through bots, and the events read for
   // them.
@@ -284,7 +278,7 @@ final class MergedLog {
   // Merged entries by event, while [_speakers] stays.
   final _merged = <EventId, (ChatEntry, MergedEntry)>{};
 
-  MergedLog(this._formats);
+  MergedLog(this._texts);
 
   List<MergedEntry> update(
     ChatMerge merge,
@@ -313,7 +307,7 @@ final class MergedLog {
           graph,
           bots,
           events[side],
-          (_logs[graph] ??= ChatLog(_formats)).update(events[side]),
+          (_logs[graph] ??= ChatLog(_texts)).update(events[side]),
           repeats,
         ),
     ];

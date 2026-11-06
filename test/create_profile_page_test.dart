@@ -1,14 +1,9 @@
-// The analyzer resolves ToxLibrary's conditional export to the stub.
-// ignore_for_file: argument_type_not_assignable
-
 import 'dart:ffi' show DynamicLibrary;
 import 'dart:typed_data';
 
 import 'package:btox/btox_app.dart';
 import 'package:btox/db/database.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
-import 'package:btox/ffi/generated/toxcore.ffi.dart' as gen;
-import 'package:btox/ffi/tox_library.ffi.dart' as tox_lib;
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/profile_settings.dart';
 import 'package:btox/pages/contact_list_page.dart';
@@ -17,11 +12,14 @@ import 'package:btox/pages/link_account_page.dart';
 import 'package:btox/providers/bootstrap_nodes.dart';
 import 'package:btox/providers/database.dart';
 import 'package:btox/providers/tox.dart';
+import 'package:btox/providers/tox_library.dart';
 import 'package:drift/native.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:toxcore/ffi/generated/toxcore.ffi.dart' as gen;
+import 'package:toxcore/ffi/tox_library.ffi.dart' as tox_lib;
 
 import 'mocks/fake_bootstrap_nodes.dart';
 import 'mocks/fake_toxcore.dart';
@@ -50,7 +48,7 @@ void main() {
         overrides: [
           bootstrapNodesProvider.overrideWith(fakeBootstrapNodesProvider),
           databaseProvider.overrideWith((ref) => db),
-          tox_lib.toxFfiProvider.overrideWith(
+          toxFfiProvider.overrideWith(
             (ref) => tox_lib.ToxLibrary(
               malloc,
               gen.ToxFfi(DynamicLibrary.open('linux/vendored/libtoxcore.so')),

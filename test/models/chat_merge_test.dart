@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/models/chat_merge.dart';
 import 'package:btox/models/content.dart';
 import 'package:btox/models/crypto.dart';
@@ -10,6 +9,7 @@ import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
 import 'package:btox/sync/fact.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/tox.dart';
 
 PublicKey _key(int i) => PublicKey(Uint8List(32)..fillRange(0, 32, i));
 
@@ -41,11 +41,11 @@ Received _from(PublicKey from, String sender, String text) => Received(
   from: from,
   sender: sender,
   message: utf8.encode(text),
-  kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+  kind: MessageType.normal,
 );
 
 List<(String?, String)> _shown(_Events group, _Events conference) =>
-    _said(MergedLog(MessageFormats.none).update(_merge, [group, conference]));
+    _said(MergedLog(MessageTexts.plain).update(_merge, [group, conference]));
 
 List<(String?, String)> _said(List<MergedEntry> entries) => [
   for (final (:entry, graph: _, rank: _) in entries)
@@ -86,7 +86,7 @@ void main() {
       Send(
         sender: 'iphy',
         message: utf8.encode('hey'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+        kind: MessageType.normal,
       ),
     );
     _add(
@@ -109,7 +109,7 @@ void main() {
       Send(
         sender: 'iphy',
         message: utf8.encode('ho'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+        kind: MessageType.normal,
       ),
     );
     // Bob saying it again is another message, with its own copy.
@@ -140,7 +140,7 @@ void main() {
     final said = [...group, ...conference]
       ..sort((a, b) => a.$2.time.compareTo(b.$2.time));
     for (final order in [said, said.reversed]) {
-      final log = MergedLog(MessageFormats.none);
+      final log = MergedLog(MessageTexts.plain);
       final (inGroup, inConference) = (
         <(EventId, SyncEvent)>[],
         <(EventId, SyncEvent)>[],
@@ -167,7 +167,7 @@ void main() {
       Send(
         sender: 'iphy',
         message: utf8.encode('split?'),
-        kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+        kind: MessageType.normal,
       ),
     );
     _add(group, _group, 200000, Sent(intent: group.first.$1));
@@ -180,7 +180,7 @@ void main() {
 
     expect(_shown(group, conference), [(null, 'split?')]);
 
-    final log = MergedLog(MessageFormats.none);
+    final log = MergedLog(MessageTexts.plain);
     log.update(_merge, [group.sublist(0, 1), const []]);
     log.update(_merge, [group, const []]);
     expect(_said(log.update(_merge, [group, conference])), [(null, 'split?')]);

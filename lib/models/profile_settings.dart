@@ -36,7 +36,11 @@ abstract class ProfileSettings with _$ProfileSettings {
     required String nickname,
     required String statusMessage,
     @Default(NetworkSettings()) NetworkSettings network,
-    @Default([]) List<String> messageFormatsOff,
+    // Friends' chats where what follows a zero byte in a message shows as
+    // its size.
+    @Default([]) List<String> hiddenAfterZero,
+    // Sends ours and shows theirs.
+    @Default(true) bool typingIndicators,
     // The image is in `avatars`.
     BlobId? avatar,
   }) = _ProfileSettings;

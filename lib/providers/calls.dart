@@ -1,6 +1,6 @@
 import 'package:btox/calls/call_channel.dart';
 import 'package:btox/calls/call_info.dart';
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/chat_view.dart';
 import 'package:btox/models/crypto.dart';
@@ -63,7 +63,7 @@ List<CallRecord> callHistory(Ref ref, Id<Profiles> profile) {
   };
   return [
     for (final (id, event) in events)
-      if ((chats[event.graph], entryOf(id, event, MessageFormats.none))
+      if ((chats[event.graph], entryOf(id, event, MessageTexts.plain))
           case (final chat?, final entry?) when event.content is Call)
         (
           chat: chat,

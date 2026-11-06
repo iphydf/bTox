@@ -1,14 +1,8 @@
 import 'dart:convert';
-// The analyzer resolves ToxLibrary's conditional export to the stub.
-// ignore_for_file: argument_type_not_assignable
-
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/generated/toxcore.ffi.dart' as gen;
-import 'package:btox/ffi/tox_library.ffi.dart' as tox_lib;
-import 'package:btox/ffi/toxcore.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
@@ -24,6 +18,10 @@ import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/ffi/generated/toxcore.ffi.dart' as gen;
+import 'package:toxcore/ffi/tox_library.ffi.dart' as tox_lib;
+import 'package:toxcore/ffi/toxcore.dart';
+import 'package:toxcore/tox.dart' hide Connection;
 
 PublicKey _key(int n) => PublicKey(Uint8List.fromList(List.filled(32, n)));
 
@@ -46,7 +44,7 @@ Future<Id<Profiles>> _addAccount(Database db, String name, int key) async {
   Received said(String text) => Received(
     sender: "$name's friend",
     message: utf8.encode(text),
-    kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+    kind: MessageType.normal,
   );
   account
     ..add(account.account, time, WantFriend(pk: friend))

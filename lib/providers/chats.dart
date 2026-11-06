@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:btox/db/database.dart';
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/models/chat_details.dart';
 import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/chat_merge.dart';
@@ -12,7 +12,7 @@ import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
 import 'package:btox/providers/database.dart';
 import 'package:btox/providers/drafts.dart';
-import 'package:btox/providers/message_formats.dart';
+import 'package:btox/providers/message_texts.dart';
 import 'package:btox/providers/profiles.dart';
 import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
@@ -33,15 +33,13 @@ Stream<List<(EventId, SyncEvent)>> _syncEvents(
 
 @riverpod
 Stream<Map<GraphId, ChatEntry>> _latestEntries(Ref ref, Id<Profiles> id) {
-  final formats = ref.watch(messageFormatsProvider(id));
-  return watchDb(ref, (db) => db.watchLatestEntries(id, formats));
+  final texts = ref.watch(messageTextsProvider(id));
+  return watchDb(ref, (db) => db.watchLatestEntries(id, texts));
 }
 
 @riverpod
-Stream<Map<GraphId, List<int>>> _receivedRanks(Ref ref, Id<Profiles> id) {
-  final formats = ref.watch(messageFormatsProvider(id));
-  return watchDb(ref, (db) => db.watchReceivedRanks(id, formats));
-}
+Stream<Map<GraphId, List<int>>> _receivedRanks(Ref ref, Id<Profiles> id) =>
+    watchDb(ref, (db) => db.watchReceivedRanks(id));
 
 /// The newest event of each conversation a chat shows, which showing the
 /// chat reads up to.
@@ -127,6 +125,10 @@ List<GraphId> _graphsOf(Ref ref, ChatRef chat) => [
           [MergeSide(graph: chat.graph, bots: const {})])
     side.graph,
 ];
+
+bool isTyping(Facts live, PublicKey pk) =>
+    live.find(Subject.friend(pk), (v) => v is TypingValue ? v.typing : null) ??
+    false;
 
 bool isOnline(Facts live, PublicKey pk) =>
     live.find(
@@ -308,6 +310,9 @@ AsyncValue<ChatSummary> chat(Ref ref, ChatRef chat) => ref
 @riverpod
 AsyncValue<ChatDetails> chatDetails(Ref ref, ChatRef chat) {
   final live = ref.watch(liveFactsProvider(chat.profile)).value;
+  final linked = ref.watch(
+    profileProvider(chat.profile).select((p) => p.value?.home != null),
+  );
   final account = ref.watch(accountProvider(chat.profile));
   final self = ref.watch(
     profilesProvider.select(
@@ -337,6 +342,11 @@ AsyncValue<ChatDetails> chatDetails(Ref ref, ChatRef chat) {
           self,
           account.value ?? AccountState.of(const []),
           live,
+          // Members are known if this device runs the profile, or while the
+          // home device is in session.
+          running:
+              !linked ||
+              (live?.of(const Subject.account()).isNotEmpty ?? false),
           relayed: relayed,
         ),
       );
@@ -397,7 +407,7 @@ FileProgress _linkedProgress(FileProgress? home, Transfer here) => switch ((
 // One per chat, so its entries are added to as its events come.
 @riverpod
 ChatLog _chatLog(Ref ref, ChatRef chat) =>
-    ChatLog(ref.watch(messageFormatsProvider(chat.profile)));
+    ChatLog(ref.watch(messageTextsProvider(chat.profile)));
 
 @riverpod
 AsyncValue<List<ChatEntry>> _eventEntries(Ref ref, ChatRef chat) {
@@ -415,7 +425,7 @@ AsyncValue<List<ChatEntry>> _eventEntries(Ref ref, ChatRef chat) {
 // One per merged chat, so its entries are added to as its events come.
 @riverpod
 MergedLog _mergedLog(Ref ref, ChatRef chat) =>
-    MergedLog(ref.watch(messageFormatsProvider(chat.profile)));
+    MergedLog(ref.watch(messageTextsProvider(chat.profile)));
 
 @riverpod
 AsyncValue<List<MergedEntry>> _mergedEntries(Ref ref, ChatRef chat) {
@@ -480,14 +490,15 @@ List<ChatSummary> _chats(
 
   final chats = [
     for (final MapEntry(key: pk, value: friend) in account.friends.entries)
-      // This device is one of the home device's friends.
-      if (friend.wanted && pk != device)
+      // The home's friends include the account's devices, which aren't chats.
+      if (friend.wanted && pk != device && !account.devices.containsKey(pk))
         ChatSummary(
           ref: ChatRef(profile, GraphId.friend(home, pk)),
           name: friend.name,
           key: pk,
           avatar: account.facts.avatarOf(Subject.friend(pk)),
           online: isOnline(live, pk),
+          typing: isTyping(live, pk),
           unread: unread(GraphId.friend(home, pk)),
           mute: muteOf(GraphId.friend(home, pk)),
           last: latest[GraphId.friend(home, pk)],

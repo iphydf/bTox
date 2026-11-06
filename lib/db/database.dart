@@ -1,11 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
-import 'package:btox/messages/message_format.dart';
+import 'package:btox/db/database.steps.dart';
+import 'package:btox/messages/message_text.dart';
 import 'package:btox/messages/split_message.dart';
 import 'package:btox/models/app_defaults.dart';
-import 'package:btox/models/bootstrap_nodes.dart';
 import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/chat_view.dart';
 import 'package:btox/models/content.dart';
@@ -16,8 +15,10 @@ import 'package:btox/models/profile_settings.dart';
 import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
 import 'package:btox/sync/fact.dart';
-import 'package:btox/sync/store.dart';
 import 'package:drift/drift.dart';
+import 'package:toxcore/messagepack.dart';
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_constants.dart';
 
 export 'package:drift/drift.dart' show Value;
 
@@ -30,9 +31,10 @@ const _idsPerStatement = 500;
   tables: [
     AppSettings,
     Avatars,
-    CachedBootstrapNodes,
     ChatDrafts,
     DeletedChats,
+    DeliveredParts,
+    GroupMemberships,
     Intents,
     LinkedNotified,
     LiveFacts,
@@ -45,9 +47,58 @@ const _idsPerStatement = 500;
 final class Database extends _$Database {
   Database(super.e);
 
-  // Bump with every schema change, then run `tools/prepare`.
+  // Bump with every schema change, then run `tools/prepare` and add the
+  // step from the last version to [migration].
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 4;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onUpgrade: stepByStep(
+      // The node list is built in. A v1 from before chat saves and delivered
+      // parts doesn't have their tables yet.
+      from1To2: (m, schema) async {
+        await m.deleteTable('cached_bootstrap_nodes');
+        await m.createTable(schema.chatSaves);
+        await m.createTable(schema.deliveredParts);
+      },
+      // Groups are kept as the keys Tox joins them with again, not as
+      // toxcore's save of them.
+      from2To3: (m, schema) async {
+        await m.createTable(schema.groupMemberships);
+        for (final row in await customSelect(
+          "SELECT profile_id, state FROM chat_saves WHERE kind = 'group'",
+        ).get()) {
+          if (_keptGroup(row.read<Uint8List>('state')) case final kept?) {
+            await customInsert(
+              'INSERT INTO group_memberships (profile_id, chat_id, '
+              'self_secret_key, chat_secret_key, privacy, password, endpoints) '
+              'VALUES (?, ?, ?, ?, ?, ?, ?)',
+              variables: [
+                Variable<int>(row.read<int>('profile_id')),
+                Variable<String>(kept.chatId.toJson()),
+                Variable<String>(kept.self.toJson()),
+                Variable<String>(kept.chat?.toJson()),
+                Variable<String>(kept.privacy.name),
+                Variable<String>(kept.password),
+                const Variable<String>('[]'),
+              ],
+            );
+          }
+        }
+        await m.deleteTable('chat_saves');
+      },
+      // A group is found through our friends again, not at the endpoints of
+      // its peers.
+      from3To4: (m, schema) async {
+        await m.dropColumn(schema.groupMemberships, 'endpoints');
+        await m.addColumn(
+          schema.groupMemberships,
+          schema.groupMemberships.state,
+        );
+      },
+    ),
+  );
 
   // Events never change, so each is decoded once.
   final _decoded = <EventId, SyncEvent?>{};
@@ -57,15 +108,6 @@ final class Database extends _$Database {
 
   Future<Id<Profiles>> addProfile(ProfilesCompanion entry) async =>
       Id(await into(profiles).insert(entry));
-
-  Future<void> cacheBootstrapNodes(BootstrapNodeList nodes) async {
-    await into(cachedBootstrapNodes).insertOnConflictUpdate(
-      CachedBootstrapNodesCompanion.insert(
-        id: const Value(0),
-        json: jsonEncode(nodes.toJson()),
-      ),
-    );
-  }
 
   /// Returns the paths of the profile's files, for the caller to delete.
   Future<List<String>> deleteProfile(Id<Profiles> id) => transaction(() async {
@@ -127,7 +169,7 @@ final class Database extends _$Database {
           graph: event.graph,
           rank: event.rank,
           received: isIncoming(event.content),
-          shown: Value(entryOf(id, event, MessageFormats.none) != null),
+          shown: Value(entryOf(id, event, MessageTexts.plain) != null),
           bytes: bytes,
         ),
     ], mode: InsertMode.insertOrIgnore);
@@ -136,7 +178,7 @@ final class Database extends _$Database {
   /// The latest entry of each chat, as the chat shows it.
   Stream<Map<GraphId, ChatEntry>> watchLatestEntries(
     Id<Profiles> profileId,
-    MessageFormats formats,
+    MessageTexts texts,
   ) =>
       customSelect(
         'SELECT e.id, e.bytes FROM sync_events e JOIN ('
@@ -154,7 +196,7 @@ final class Database extends _$Database {
             row.read<Uint8List>('bytes'),
           );
           if (event case final event?) {
-            if (entryOf(id, event, formats) case final entry?) {
+            if (entryOf(id, event, texts) case final entry?) {
               (candidates[event.graph] ??= {})[id] = entry;
             }
           }
@@ -174,7 +216,7 @@ final class Database extends _$Database {
               // Of events of the same rank, the one the chat shows last: it
               // also orders them by when they came after their parents.
               _ =>
-                ChatLog(formats)
+                ChatLog(texts)
                     .update(await _syncEventsIn(profileId, graph))
                     .map((e) => e.event)
                     .lastWhere(entries.containsKey, orElse: () => last),
@@ -222,13 +264,6 @@ final class Database extends _$Database {
       }
     }
     return entry;
-  }
-
-  Future<BootstrapNodeList?> getCachedBootstrapNodes() async {
-    final row = await select(cachedBootstrapNodes).getSingleOrNull();
-    return row == null
-        ? null
-        : BootstrapNodeList.fromJson(jsonDecode(row.json));
   }
 
   /// Signs the profile in and shows it.
@@ -292,23 +327,32 @@ final class Database extends _$Database {
     }
   });
 
-  /// Sends [message], as several where it's longer than an event takes.
-  Future<void> addSend(Id<Profiles> profileId, GraphId graph, String message) =>
-      batch(
-        (batch) => batch.insertAll(intents, [
-          for (final part in splitMessage(utf8.encode(message), maxSendBytes))
-            IntentsCompanion.insert(
-              profileId: profileId,
-              graph: Value(graph),
-              // The background service knows our name in the chat.
-              content: Send(
-                sender: '',
-                message: part,
-                kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-              ),
+  /// Long messages are split over several events.
+  Future<void> addSend(
+    Id<Profiles> profileId,
+    GraphId graph,
+    String message, {
+    PublicKey? privately,
+    MessageType kind = MessageType.normal,
+  }) => batch(
+    (batch) => batch.insertAll(intents, [
+      for (final part in splitMessage(utf8.encode(message), maxSendBytes))
+        IntentsCompanion.insert(
+          profileId: profileId,
+          graph: Value(graph),
+          // The service fills in our name.
+          content: switch (privately) {
+            final to? => SendPrivately(
+              to: to,
+              sender: '',
+              message: part,
+              kind: kind,
             ),
-        ]),
-      );
+            null => Send(sender: '', message: part, kind: kind),
+          },
+        ),
+    ]),
+  );
 
   Future<void> addFileSend(
     Id<Profiles> profileId,
@@ -436,21 +480,21 @@ final class Database extends _$Database {
         .go();
   }
 
-  /// The ranks of others' messages and files, by conversation, but for
-  /// messages that repeat an earlier one as [formats] read them.
-  Stream<Map<GraphId, List<int>>> watchReceivedRanks(
-    Id<Profiles> profileId,
-    MessageFormats formats,
-  ) {
-    var received = _Received(formats);
+  /// The ranks of others' messages and files, by conversation.
+  Stream<Map<GraphId, List<int>>> watchReceivedRanks(Id<Profiles> profileId) {
+    var ranks = <GraphId, List<int>>{};
     return _addedEvents('profile_id = ? AND received', [
       Variable<int>(profileId.value),
     ]).map((added) {
       if (added.all) {
-        received = _Received(formats);
+        ranks = {};
       }
-      added.events.forEach(received.add);
-      return received.ranks;
+      for (final (_, event) in added.events) {
+        (ranks[event.graph] ??= []).add(event.rank);
+      }
+      return {
+        for (final MapEntry(:key, :value) in ranks.entries) key: [...value],
+      };
     });
   }
 
@@ -539,6 +583,56 @@ final class Database extends _$Database {
     )..where((c) => c.profileId.equals(profileId.value))).get())
       row.graph: row.rank,
   };
+
+  Future<List<GroupMembership>> getGroupMemberships(Id<Profiles> profileId) =>
+      (select(
+        groupMemberships,
+      )..where((g) => g.profileId.equals(profileId.value))).get();
+
+  Future<void> saveGroupMembership(GroupMembershipsCompanion membership) =>
+      into(groupMemberships).insertOnConflictUpdate(membership);
+
+  Future<void> forgetGroupMembership(
+    Id<Profiles> profileId,
+    GroupChatId chatId,
+  ) =>
+      (delete(groupMemberships)..where(
+            (g) =>
+                g.profileId.equals(profileId.value) &
+                g.chatId.equals(
+                  const HexConverter(GroupChatId.fromJson).toSql(chatId),
+                ),
+          ))
+          .go();
+
+  Future<Map<EventId, int>> getDeliveredParts(Id<Profiles> profileId) async => {
+    for (final row in await (select(
+      deliveredParts,
+    )..where((d) => d.profileId.equals(profileId.value))).get())
+      row.event: row.parts,
+  };
+
+  Future<void> setDeliveredParts(
+    Id<Profiles> profileId,
+    EventId event,
+    int parts,
+  ) => into(deliveredParts).insertOnConflictUpdate(
+    DeliveredPartsCompanion.insert(
+      profileId: profileId,
+      event: event,
+      parts: parts,
+    ),
+  );
+
+  Future<void> forgetDeliveredParts(Id<Profiles> profileId, EventId event) =>
+      (delete(deliveredParts)..where(
+            (d) =>
+                d.profileId.equals(profileId.value) &
+                d.event.equals(
+                  const HexConverter(EventId.fromJson).toSql(event),
+                ),
+          ))
+          .go();
 
   Future<Id<Transfers>> addTransfer(TransfersCompanion entry) async =>
       Id(await into(transfers).insert(entry));
@@ -653,6 +747,22 @@ final class Database extends _$Database {
         .write(
           TransfersCompanion(
             state: Value(accept ? FileState.active : FileState.cancelled),
+          ),
+        );
+  }
+
+  /// From the start, as cancelled files can't resume.
+  Future<void> sendTransferAgain(Id<Transfers> id) async {
+    await (update(transfers)..where(
+          (t) =>
+              t.id.equals(id.value) &
+              t.incoming.not() &
+              t.state.equalsValue(FileState.cancelled),
+        ))
+        .write(
+          const TransfersCompanion(
+            state: Value(FileState.active),
+            transferred: Value(0),
           ),
         );
   }
@@ -852,35 +962,69 @@ SyncEvent? _readable(Uint8List bytes) {
   }
 }
 
-/// The ranks of received messages and files, by conversation, as they come
-/// in any order: of messages with the same key, only the first counts.
-final class _Received {
-  final MessageFormats _formats;
-  final _ranks = <GraphId, List<int>>{};
-  final _first = <GraphId, Map<MessageKey, (int, EventId)>>{};
-
-  _Received(this._formats);
-
-  Map<GraphId, List<int>> get ranks => {
-    for (final MapEntry(:key, :value) in _ranks.entries) key: [...value],
-  };
-
-  void add((EventId, SyncEvent) received) {
-    final (id, event) = received;
-    final ranks = _ranks.putIfAbsent(event.graph, () => []);
-    final key = keyOf(event.content, _formats);
-    if (key == null) {
-      ranks.add(event.rank);
-      return;
+/// The chat ID, keys, privacy and password in toxcore's save of a group, as
+/// `tox_group_get_savedata` wrote it, or null if it isn't one.
+({
+  GroupChatId chatId,
+  GroupSecretKey self,
+  GroupSecretKey? chat,
+  Privacy privacy,
+  String password,
+})?
+_keptGroup(Uint8List state) {
+  void skip(Unpacker u, int count) {
+    for (var i = 0; i < count; ++i) {
+      u.skip();
     }
-    final firsts = _first.putIfAbsent(event.graph, () => {});
-    final first = firsts[key];
-    if (first == null || compareRanks((event.rank, id), first) < 0) {
-      if (first != null) {
-        ranks.remove(first.$1);
-      }
-      firsts[key] = (event.rank, id);
-      ranks.add(event.rank);
-    }
+  }
+
+  // A key is the encryption key, then the signing key. A secret signing key
+  // is its seed, then its public key, which is the chat ID for the group's.
+  const seedStart = 32;
+  const signingStart = 32;
+  GroupSecretKey seedOf(Uint8List key) => GroupSecretKey(
+    key.sublist(seedStart, seedStart + GroupSecretKey.kLength),
+  );
+
+  try {
+    final u = Unpacker(state)..unpackListLength();
+
+    // The shared state's values: whether we left, the name's length, the
+    // privacy state, and five more.
+    u.unpackListLength();
+    skip(u, 2);
+    final privacy = GroupPrivacyState.fromValue(u.unpackInt()!);
+    skip(u, 5);
+
+    // Its bytes: signature, founder, name, password and the moderators' hash.
+    u.unpackListLength();
+    skip(u, 3);
+    final password = utf8.decode(u.unpackBinary()!, allowMalformed: true);
+    skip(u, 1);
+
+    // The topic and the moderators.
+    skip(u, 2);
+
+    // The group's public and secret key, then ours.
+    u.unpackListLength();
+    final chatPublic = u.unpackBinary()!;
+    final chat = u.unpackBinary()!;
+    skip(u, 1);
+    final self = u.unpackBinary()!;
+
+    return (
+      chatId: GroupChatId(
+        chatPublic.sublist(signingStart, signingStart + toxGroupChatIdSize),
+      ),
+      self: seedOf(self),
+      // Only the founder has the group's secret key.
+      chat: chat.every((b) => b == 0) ? null : seedOf(chat),
+      privacy: privacy == GroupPrivacyState.private
+          ? Privacy.private
+          : Privacy.public,
+      password: password,
+    );
+  } on Object catch (_) {
+    return null;
   }
 }

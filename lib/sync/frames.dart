@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_constants.dart';
+import 'package:toxcore/tox_constants.dart';
 
 const syncPacketId = 0xb0;
 const maxSyncMessage = 1 << 20;
