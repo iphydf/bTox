@@ -1,8 +1,7 @@
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_api.dart' show ApiException;
-import 'package:btox/api/toxcore/tox_av.dart';
-import 'package:btox/ffi/toxcore.dart' show Toxav_Call_Control;
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_av.dart';
 
 final class FakeToxAv extends ToxAv {
   final events = <AvEvent>[];
@@ -10,7 +9,7 @@ final class FakeToxAv extends ToxAv {
   /// (friend number, audio bit rate), for calls and answers.
   final calls = <(int, int)>[];
   final answers = <(int, int)>[];
-  final controls = <(int, Toxav_Call_Control)>[];
+  final controls = <(int, AvCallControl)>[];
   final frames = <(int, Int16List)>[];
   final videoBitRates = <(int, int)>[];
   final videoFrames = <(int, int, int)>[];
@@ -33,50 +32,57 @@ final class FakeToxAv extends ToxAv {
   int iterationInterval() => 20;
 
   @override
-  void call(int friendNumber, int audioBitRate, int videoBitRate) {
+  void call(
+    FriendNumber friendNumber,
+    AvBitRate audioBitRate,
+    AvBitRate videoBitRate,
+  ) {
     _check();
-    calls.add((friendNumber, audioBitRate));
+    calls.add((friendNumber.value, audioBitRate.value));
   }
 
   @override
-  void answer(int friendNumber, int audioBitRate, int videoBitRate) =>
-      answers.add((friendNumber, audioBitRate));
+  void answer(
+    FriendNumber friendNumber,
+    AvBitRate audioBitRate,
+    AvBitRate videoBitRate,
+  ) => answers.add((friendNumber.value, audioBitRate.value));
 
   @override
-  void callControl(int friendNumber, Toxav_Call_Control control) {
+  void callControl(FriendNumber friendNumber, AvCallControl control) {
     _check();
-    controls.add((friendNumber, control));
+    controls.add((friendNumber.value, control));
   }
 
   @override
   void audioSendFrame(
-    int friendNumber,
+    FriendNumber friendNumber,
     Int16List pcm,
     int sampleCount,
-    int channels,
-    int samplingRate,
+    AvChannels channels,
+    AvSamplingRate samplingRate,
   ) {
     _check();
-    frames.add((friendNumber, pcm));
+    frames.add((friendNumber.value, pcm));
   }
 
   @override
   void videoSendFrame(
-    int friendNumber,
-    int width,
-    int height,
+    FriendNumber friendNumber,
+    AvWidth width,
+    AvHeight height,
     Uint8List y,
     Uint8List u,
     Uint8List v,
   ) {
     _check();
-    videoFrames.add((friendNumber, width, height));
+    videoFrames.add((friendNumber.value, width.value, height.value));
   }
 
   @override
-  void videoSetBitRate(int friendNumber, int bitRate) {
+  void videoSetBitRate(FriendNumber friendNumber, AvBitRate bitRate) {
     _check();
-    videoBitRates.add((friendNumber, bitRate));
+    videoBitRates.add((friendNumber.value, bitRate.value));
   }
 
   @override

@@ -1,19 +1,17 @@
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_api.dart';
-import 'package:btox/api/toxcore/tox_av.dart';
 import 'package:btox/calls/call_protocol.dart';
-import 'package:btox/ffi/toxcore.dart'
-    show Toxav_Call_Control, Toxav_Friend_Call_State;
 import 'package:btox/logger.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:clock/clock.dart';
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_av.dart';
 
 const _logger = Logger(['ToxavProtocol']);
 
 /// Opus at 48 kbit/s, plenty for voice.
-const _audioBitRate = 48;
+const _audioBitRate = AvBitRate(48);
 
 /// VP8 in kbit/s: where video starts and the most it goes up to, and the
 /// least toxav's loss reports take it down to.
@@ -28,20 +26,16 @@ const _videoBitRateStep = Duration(seconds: 5);
 /// take.
 const _maxVideoPixels = 3840 * 2160;
 
-final _failed = Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_ERROR.value;
-final _ended =
-    _failed | Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_FINISHED.value;
-final _sendingVideo =
-    Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_SENDING_V.value;
+final _ended = AvFriendCallState.error | AvFriendCallState.finished;
 
 final class ToxavProtocol implements CallProtocol {
   final ToxAv _av;
-  final int? Function(PublicKey friend) _numberOf;
-  final PublicKey? Function(int friendNumber) _keyOf;
-  final _answered = <int>{};
-  final _friendVideo = <int>{};
+  final FriendNumber? Function(PublicKey friend) _numberOf;
+  final PublicKey? Function(FriendNumber friendNumber) _keyOf;
+  final _answered = <FriendNumber>{};
+  final _friendVideo = <FriendNumber>{};
   // What we send video at, and since when, to friends we send it to.
-  final _videoBitRates = <int, (int, DateTime)>{};
+  final _videoBitRates = <FriendNumber, (int, DateTime)>{};
 
   ToxavProtocol(this._av, this._numberOf, this._keyOf);
 
@@ -77,13 +71,17 @@ final class ToxavProtocol implements CallProtocol {
           yield CallSignal.friendVideo(friend, on: true);
         }
       case ToxAvEventCallState(:final friendNumber, :final state)
-          when state & _ended != 0:
-        yield _finished(friendNumber, friend, failed: state & _failed != 0);
+          when state.hasAny(_ended):
+        yield _finished(
+          friendNumber,
+          friend,
+          failed: state.has(AvFriendCallState.error),
+        );
       case ToxAvEventCallState(:final friendNumber, :final state):
         if (_answered.add(friendNumber)) {
           yield CallSignal.answered(friend);
         }
-        final video = state & _sendingVideo != 0;
+        final video = state.has(AvFriendCallState.sendingV);
         if (video != _friendVideo.contains(friendNumber)) {
           video
               ? _friendVideo.add(friendNumber)
@@ -98,17 +96,17 @@ final class ToxavProtocol implements CallProtocol {
         yield CallSignal.audio(
           friend,
           pcm,
-          channels: channels,
-          sampleRate: samplingRate,
+          channels: channels.value,
+          sampleRate: samplingRate.value,
         );
       case ToxAvEventVideoReceiveFrame(:final width, :final height)
-          when width * height <= _maxVideoPixels:
+          when width.value * height.value <= _maxVideoPixels:
         yield CallSignal.video(friend, _packed(event));
       case ToxAvEventVideoBitRate(:final friendNumber, :final videoBitRate)
           when _videoBitRates.containsKey(friendNumber):
         _setVideoBitRate(
           friendNumber,
-          videoBitRate.clamp(_minVideoBitRate, _maxVideoBitRate),
+          videoBitRate.value.clamp(_minVideoBitRate, _maxVideoBitRate),
         );
       default:
         break;
@@ -117,9 +115,9 @@ final class ToxavProtocol implements CallProtocol {
 
   static I420Frame _packed(ToxAvEventVideoReceiveFrame frame) {
     final packed = I420Frame(
-      frame.width,
-      frame.height,
-      Uint8List(I420Frame.size(frame.width, frame.height)),
+      frame.width.value,
+      frame.height.value,
+      Uint8List(I420Frame.size(frame.width.value, frame.height.value)),
     );
     for (final (from, stride, to, width) in [
       (frame.y, frame.ystride, packed.y, packed.width),
@@ -145,9 +143,9 @@ final class ToxavProtocol implements CallProtocol {
     }
   }
 
-  void _setVideoBitRate(int number, int rate) {
+  void _setVideoBitRate(FriendNumber number, int rate) {
     try {
-      _av.videoSetBitRate(number, rate);
+      _av.videoSetBitRate(number, AvBitRate(rate));
       if (rate == 0) {
         _videoBitRates.remove(number);
       } else {
@@ -159,7 +157,7 @@ final class ToxavProtocol implements CallProtocol {
   }
 
   CallSignal _finished(
-    int friendNumber,
+    FriendNumber friendNumber,
     PublicKey friend, {
     required bool failed,
   }) {
@@ -176,7 +174,7 @@ final class ToxavProtocol implements CallProtocol {
   bool call(PublicKey friend, {required bool video}) {
     final number = _number(friend);
     try {
-      _av.call(number, _audioBitRate, video ? _videoBitRate : 0);
+      _av.call(number, _audioBitRate, AvBitRate(video ? _videoBitRate : 0));
     } on ApiException catch (e) {
       // Such as a friend gone offline just now.
       _logger.w('Calling friend $number: $e');
@@ -191,7 +189,7 @@ final class ToxavProtocol implements CallProtocol {
   @override
   void answer(PublicKey friend, {required bool video}) {
     final number = _number(friend);
-    _av.answer(number, _audioBitRate, video ? _videoBitRate : 0);
+    _av.answer(number, _audioBitRate, AvBitRate(video ? _videoBitRate : 0));
     _answered.add(number);
     if (video) {
       _videoBitRates[number] = (_videoBitRate, clock.now());
@@ -211,9 +209,9 @@ final class ToxavProtocol implements CallProtocol {
     _cancel(number);
   }
 
-  void _cancel(int number) {
+  void _cancel(FriendNumber number) {
     try {
-      _av.callControl(number, Toxav_Call_Control.TOXAV_CALL_CONTROL_CANCEL);
+      _av.callControl(number, AvCallControl.cancel);
     } on ApiException catch (e) {
       // Already over at the other end.
       _logger.d('Hanging up on friend $number: $e');
@@ -223,7 +221,13 @@ final class ToxavProtocol implements CallProtocol {
   @override
   void sendAudio(PublicKey friend, Int16List pcm) {
     try {
-      _av.audioSendFrame(_number(friend), pcm, pcm.length, 1, callSampleRate);
+      _av.audioSendFrame(
+        _number(friend),
+        pcm,
+        pcm.length,
+        const AvChannels(1),
+        AvSamplingRate(callSampleRate),
+      );
     } on ApiException catch (e) {
       // Such as while the friend's capabilities catch up.
       _logger.d('Sending audio to $friend: $e');
@@ -243,8 +247,8 @@ final class ToxavProtocol implements CallProtocol {
     try {
       _av.videoSendFrame(
         _number(friend),
-        frame.width,
-        frame.height,
+        AvWidth(frame.width),
+        AvHeight(frame.height),
         frame.y,
         frame.u,
         frame.v,
@@ -255,6 +259,6 @@ final class ToxavProtocol implements CallProtocol {
     }
   }
 
-  int _number(PublicKey friend) =>
+  FriendNumber _number(PublicKey friend) =>
       _numberOf(friend) ?? (throw StateError('Not a friend: $friend'));
 }

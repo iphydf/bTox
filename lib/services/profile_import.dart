@@ -1,10 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_options.dart';
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/tox_library.dart';
-import 'package:btox/ffi/toxcore.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
@@ -12,6 +9,10 @@ import 'package:btox/models/profile_settings.dart';
 import 'package:btox/sync/event.dart';
 import 'package:btox/sync/home.dart';
 import 'package:clock/clock.dart';
+import 'package:toxcore/ffi/tox_library.dart';
+import 'package:toxcore/ffi/toxcore.dart';
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_options.dart';
 
 final class ToxSaveProfile {
   final SecretKey secretKey;
@@ -44,7 +45,7 @@ ToxSaveProfile readToxSave(ToxLibrary lib, Uint8List save) {
       udpEnabled: false,
       localDiscoveryEnabled: false,
       savedata: save,
-      savedataType: Tox_Savedata_Type.TOX_SAVEDATA_TYPE_TOX_SAVE,
+      savedataType: SavedataType.toxSave,
     ),
   );
   try {

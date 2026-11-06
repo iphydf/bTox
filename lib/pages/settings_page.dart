@@ -1,7 +1,5 @@
 import 'package:btox/attachments/attachments.dart';
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/tox_library.dart';
-import 'package:btox/ffi/toxcore.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
 import 'package:btox/logger.dart';
 import 'package:btox/models/app_defaults.dart';
@@ -13,6 +11,7 @@ import 'package:btox/providers/connection_status.dart';
 import 'package:btox/providers/database.dart';
 import 'package:btox/providers/message_formats.dart';
 import 'package:btox/providers/profiles.dart';
+import 'package:btox/providers/tox_library.dart';
 import 'package:btox/services/backup.dart';
 import 'package:btox/widgets/account_picker.dart';
 import 'package:btox/widgets/chat_file_bubble.dart';
@@ -27,6 +26,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:image_picker/image_picker.dart' show XFile;
+import 'package:toxcore/ffi/toxcore.dart';
 
 const _logger = Logger(['SettingsPage']);
 
@@ -126,6 +126,15 @@ final class SettingsPage extends ConsumerWidget {
                   ],
                 ),
               ),
+            ),
+          // Only profiles this device runs can show typing.
+          if (profile.home == null)
+            SwitchListTile(
+              title: Text(l10n.typingIndicators),
+              subtitle: Text(l10n.typingIndicatorsHint),
+              value: settings.typingIndicators,
+              onChanged: (on) =>
+                  updateSettings((s) => s.copyWith(typingIndicators: on)),
             ),
           SwitchListTile(
             title: Text(l10n.udpEnabled),
@@ -291,7 +300,7 @@ final class _ExportTile extends HookConsumerWidget {
 }
 
 String _autoAcceptText(AppLocalizations l10n, int size) =>
-    size == 0 ? l10n.never : fileSizeText(size);
+    size == 0 ? l10n.never : l10n.autoAcceptUpTo(fileSizeText(size));
 
 final class _SectionHeader extends StatelessWidget {
   final String title;

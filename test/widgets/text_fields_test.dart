@@ -1,10 +1,10 @@
-import 'package:btox/api/toxcore/tox_constants.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
 import 'package:btox/widgets/friend_request_message_field.dart';
 import 'package:btox/widgets/nickname_field.dart';
 import 'package:btox/widgets/status_message_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/tox_constants.dart';
 
 void main() {
   testWidgets('a text longer than Tox takes is refused, as Tox counts it in '

@@ -1,8 +1,8 @@
 import 'dart:convert';
 
-import 'package:btox/api/toxcore/tox_constants.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
+import 'package:toxcore/tox_constants.dart';
 
 final class StatusMessageField extends StatelessWidget {
   final TextEditingController controller;

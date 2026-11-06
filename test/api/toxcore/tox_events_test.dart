@@ -1,7 +1,8 @@
-import 'package:btox/api/toxcore/tox_events.dart';
-import 'package:btox/ffi/generated/toxcore.ffi.dart';
-import 'package:btox/packets/messagepack.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/ffi/generated/toxcore.ffi.dart';
+import 'package:toxcore/messagepack.dart';
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_events.dart';
 
 void main() {
   test('an event that can\'t be read is left out of its batch', () {
@@ -27,7 +28,7 @@ void main() {
       ..packBool(true);
 
     expect(unpackEvents(Unpacker(packer.takeBytes())), [
-      const Event.friendTyping(friendNumber: 0, typing: true),
+      const Event.friendTyping(friendNumber: FriendNumber(0), typing: true),
     ]);
   });
 }

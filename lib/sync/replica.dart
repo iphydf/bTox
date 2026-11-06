@@ -2,7 +2,6 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:btox/logger.dart';
-import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
@@ -25,7 +24,6 @@ final class Replica {
   final PublicKey home;
   final GraphId account;
   final store = EventStore();
-  late final earlier = EarlierRepeats(store);
   var _session = false;
   // Conversations whose latest page has been asked for in this session.
   final _paged = <GraphId>{};
@@ -127,6 +125,21 @@ final class Replica {
       _accountChanged();
     }
     return _session ? session.batches([event.$3]) : const [];
+  }
+
+  /// Asks for the page before the oldest events held of [graph]'s
+  /// conversation. Its answer comes as Events. Nothing outside a session, or
+  /// once all of it is here.
+  List<SessionMessage> older(GraphId graph) {
+    final frontier = store.frontier(graph);
+    return [
+      if (_session && frontier.isNotEmpty)
+        History(
+          graph: graph,
+          before: [for (final (id, _) in frontier) id],
+          limit: historyPage,
+        ),
+    ];
   }
 
   ({List<SessionMessage> replies, List<NewEvent> added}) _add(

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:btox/packets/messagepack.dart';
+import 'package:toxcore/messagepack.dart';
 
 /// The most milliseconds from the epoch a time may be, either way: as far as
 /// dates go.

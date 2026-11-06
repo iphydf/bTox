@@ -2,16 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_events.dart';
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/toxcore.dart';
-import 'package:btox/messages/message_format.dart';
 import 'package:btox/messages/split_message.dart';
 import 'package:btox/models/chat_view.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
 import 'package:btox/models/profile_settings.dart';
+import 'package:btox/providers/chats.dart';
+import 'package:btox/services/chat_channel.dart';
 import 'package:btox/services/message_notifier.dart';
 import 'package:btox/services/tox_sync.dart';
 import 'package:btox/sync/account.dart';
@@ -23,6 +22,11 @@ import 'package:convert/convert.dart' show hex;
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/tox.dart'
+    as toxcore
+    show Connection, UserStatus;
+import 'package:toxcore/tox.dart' hide Connection, UserStatus;
+import 'package:toxcore/tox_events.dart';
 
 import '../mocks/fake_message_format.dart';
 import '../mocks/fake_notifier.dart';
@@ -50,6 +54,7 @@ void main() {
   late ToxSync sync;
   late List<Shown> shown;
   late List<String> requested;
+  late List<PublicKey> unrequested;
   late MessageNotifier notifier;
 
   setUp(() async {
@@ -67,9 +72,11 @@ void main() {
     );
     shown = [];
     requested = [];
+    unrequested = [];
     notifier = fakeNotifier(
       shown,
       request: (_, from, message, _) async => requested.add(message),
+      unrequested: unrequested,
     );
     sync = ToxSync(
       db,
@@ -77,6 +84,7 @@ void main() {
       profileId,
       maxMessageLength: 10,
       retryDelay: const Duration(milliseconds: 20),
+      typingFor: const Duration(milliseconds: 50),
       notifier: notifier,
       knownFormats: const [FakeMessageFormat()],
     );
@@ -106,17 +114,20 @@ void main() {
     rankOrder(await db.watchSyncEvents(profileId, _account).first),
   );
 
-  void setOnline(int friendNumber, bool online) => sync.handleEvent(
+  void setOnline(FriendNumber friendNumber, bool online) => sync.handleEvent(
     ToxEventFriendConnectionStatus(
       friendNumber: friendNumber,
       connectionStatus: online
-          ? Tox_Connection.TOX_CONNECTION_UDP
-          : Tox_Connection.TOX_CONNECTION_NONE,
+          ? toxcore.Connection.udp
+          : toxcore.Connection.none,
     ),
   );
 
   void receipt(int messageId) => sync.handleEvent(
-    ToxEventFriendReadReceipt(friendNumber: 0, messageId: messageId),
+    ToxEventFriendReadReceipt(
+      friendNumber: FriendNumber(0),
+      messageId: FriendMessageId(messageId),
+    ),
   );
 
   Future<bool> delivered() async =>
@@ -147,7 +158,7 @@ void main() {
     expect(tox.friends, [_friend]);
     expect(tox.friendRequests, [(_friendAddress, 'Add me')]);
 
-    setOnline(0, true);
+    setOnline(FriendNumber(0), true);
     await _settle();
     expect((await account()).friends[_friend]?.nospam, isNull);
   });
@@ -182,15 +193,44 @@ void main() {
     Future<FactValue?> connection() async =>
         (await db.watchLiveFacts(profileId).first)
             .of(Subject.friend(_friend))
+            .whereType<ConnectionValue>()
             .singleOrNull;
 
-    setOnline(0, true);
+    setOnline(FriendNumber(0), true);
     await _settle();
     expect(await connection(), const FactValue.connection(Connection.udp));
 
-    setOnline(0, false);
+    setOnline(FriendNumber(0), false);
     await _settle();
     expect(await connection(), const FactValue.connection(Connection.none));
+  });
+
+  test("records a friend's status message and whether they're away", () async {
+    await want();
+    sync.start();
+    await _until(() => tox.friends.isNotEmpty);
+
+    sync.handleEvent(
+      ToxEventFriendStatusMessage(
+        friendNumber: FriendNumber(0),
+        message: utf8.encode('Out for lunch'),
+      ),
+    );
+    sync.handleEvent(
+      const ToxEventFriendStatus(
+        friendNumber: FriendNumber(0),
+        status: toxcore.UserStatus.away,
+      ),
+    );
+    await _settle();
+    expect(
+      (await account()).facts.of(Subject.friend(_friend)),
+      contains(const FactValue.statusMessage('Out for lunch')),
+    );
+    expect(
+      (await db.watchLiveFacts(profileId).first).of(Subject.friend(_friend)),
+      contains(const FactValue.status(UserStatus.away)),
+    );
   });
 
   test('says Hello to friends coming online', () async {
@@ -198,12 +238,12 @@ void main() {
     sync.start();
     await _until(() => tox.friends.isNotEmpty);
 
-    setOnline(0, true);
+    setOnline(FriendNumber(0), true);
     // Toxcore says so again when the friend moves from UDP to TCP.
     sync.handleEvent(
       ToxEventFriendConnectionStatus(
-        friendNumber: 0,
-        connectionStatus: Tox_Connection.TOX_CONNECTION_TCP,
+        friendNumber: FriendNumber(0),
+        connectionStatus: toxcore.Connection.tcp,
       ),
     );
     final (friendNumber, packet) = tox.losslessPackets.single;
@@ -224,7 +264,7 @@ void main() {
       expect(tox.sentMessages, isEmpty);
       expect(await db.select(db.intents).get(), isEmpty);
 
-      setOnline(0, true);
+      setOnline(FriendNumber(0), true);
       expect(sentTexts(), ['hi']);
 
       receipt(tox.sentMessages.single.$2);
@@ -235,19 +275,19 @@ void main() {
         isA<Delivered>(),
       ]);
 
-      setOnline(0, false);
-      setOnline(0, true);
+      setOnline(FriendNumber(0), false);
+      setOnline(FriendNumber(0), true);
       await _settle();
       expect(sentTexts(), ['hi']);
     });
 
     test('are sent again after the friend went offline', () async {
-      setOnline(0, true);
+      setOnline(FriendNumber(0), true);
       await db.addSend(profileId, _chat, 'hi');
       await _until(() => tox.sentMessages.isNotEmpty);
 
-      setOnline(0, false);
-      setOnline(0, true);
+      setOnline(FriendNumber(0), false);
+      setOnline(FriendNumber(0), true);
       expect(sentTexts(), ['hi', 'hi']);
 
       receipt(tox.sentMessages.first.$2);
@@ -258,7 +298,7 @@ void main() {
 
     test('that fail are sent again on the next attempt', () async {
       tox.unreachableFriends.add(0);
-      setOnline(0, true);
+      setOnline(FriendNumber(0), true);
       await db.addSend(profileId, _chat, 'hi');
       await _settle();
       expect(tox.sentMessages, isEmpty);
@@ -269,7 +309,7 @@ void main() {
     });
 
     test('too long for Tox are delivered in parts', () async {
-      setOnline(0, true);
+      setOnline(FriendNumber(0), true);
       await db.addSend(profileId, _chat, 'hello brave new world');
       await _until(() => tox.sentMessages.isNotEmpty);
       expect(sentTexts(), ['hello ', 'brave new ', 'world']);
@@ -285,9 +325,40 @@ void main() {
       expect(await delivered(), isTrue);
     });
 
+    test('in parts go on after a restart from what arrived', () async {
+      setOnline(FriendNumber(0), true);
+      await db.addSend(profileId, _chat, 'hello brave new world');
+      await _until(() => tox.sentMessages.isNotEmpty);
+      for (final (_, messageId, _) in tox.sentMessages.take(2)) {
+        receipt(messageId);
+      }
+      await _settle();
+      sync.dispose();
+
+      final again = FakeToxcore();
+      final restarted = ToxSync(
+        db,
+        again,
+        profileId,
+        maxMessageLength: 10,
+        retryDelay: const Duration(milliseconds: 20),
+      );
+      addTearDown(restarted.dispose);
+      restarted.start();
+      await _until(() => again.friends.isNotEmpty);
+      restarted.handleEvent(
+        const ToxEventFriendConnectionStatus(
+          friendNumber: FriendNumber(0),
+          connectionStatus: toxcore.Connection.udp,
+        ),
+      );
+      await _until(() => again.sentMessages.isNotEmpty);
+      expect([for (final (_, _, text) in again.sentMessages) text], ['world']);
+    });
+
     test('in parts go on where Tox stopped, once it takes more', () async {
       tox.sendQueueRoom = 1;
-      setOnline(0, true);
+      setOnline(FriendNumber(0), true);
       await db.addSend(profileId, _chat, 'hello brave new world');
       await _until(() => tox.sentMessages.isNotEmpty);
       await _settle();
@@ -302,6 +373,51 @@ void main() {
     });
   });
 
+  group('typing', () {
+    setUp(() async {
+      await want();
+      sync.start();
+      await _until(() => tox.friends.isNotEmpty);
+      setOnline(FriendNumber(0), true);
+    });
+
+    Future<bool> friendTyping() async =>
+        isTyping(await db.watchLiveFacts(profileId).first, _friend);
+
+    test('shows a friend typing until they go offline', () async {
+      sync.handleEvent(
+        const ToxEventFriendTyping(friendNumber: FriendNumber(0), typing: true),
+      );
+      await _settle();
+      expect(await friendTyping(), isTrue);
+
+      setOnline(FriendNumber(0), false);
+      await _settle();
+      expect(await friendTyping(), isFalse);
+    });
+
+    test('tells a friend we type, and that we stopped after a while', () async {
+      TypingNotice(ChatRef(profileId, _chat)).typing(typing: true);
+      await _until(() => tox.typingTold.length == 2);
+      expect(tox.typingTold, [(0, true), (0, false)]);
+    });
+
+    test('shows and tells nothing with typing turned off', () async {
+      await db.updateProfileSettings(
+        profileId,
+        (s) => s.copyWith(typingIndicators: false),
+      );
+      await _settle();
+      sync.handleEvent(
+        const ToxEventFriendTyping(friendNumber: FriendNumber(0), typing: true),
+      );
+      TypingNotice(ChatRef(profileId, _chat)).typing(typing: true);
+      await _settle();
+      expect(await friendTyping(), isFalse);
+      expect(tox.typingTold, isEmpty);
+    });
+  });
+
   test('splitMessage never splits a character', () {
     List<String> split(String text, int maxBytes) => [
       for (final part in splitMessage(utf8.encode(text), maxBytes))
@@ -311,19 +427,20 @@ void main() {
     expect(split('a bbbbbbbbbbb', 10), ['a bbbbbbbb', 'bbb']);
   });
 
-  void receive(int friendNumber, List<int> message) => sync.handleEvent(
-    ToxEventFriendMessage(
-      friendNumber: friendNumber,
-      type: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
-      message: Uint8List.fromList(message),
-    ),
-  );
+  void receive(FriendNumber friendNumber, List<int> message) =>
+      sync.handleEvent(
+        ToxEventFriendMessage(
+          friendNumber: friendNumber,
+          type: MessageType.normal,
+          message: Uint8List.fromList(message),
+        ),
+      );
 
   test('deletes a friend with their chat, which starts over', () async {
     await want();
     sync.start();
     await _until(() => tox.friends.isNotEmpty);
-    receive(0, utf8.encode('hi'));
+    receive(FriendNumber(0), utf8.encode('hi'));
     await _settle();
     final (hi, received) =
         (await db.watchSyncEvents(profileId, _chat).first).single;
@@ -353,7 +470,7 @@ void main() {
     // Read markers point into the deleted chat, so new messages come after.
     await want();
     await _until(() => tox.friends.length == 2);
-    receive(1, utf8.encode('hi again'));
+    receive(FriendNumber(1), utf8.encode('hi again'));
     await _settle();
     final (_, again) =
         (await db.watchSyncEvents(profileId, _chat).first).single;
@@ -366,10 +483,10 @@ void main() {
     await _until(() => tox.friends.isNotEmpty && tox.name == 'Me');
 
     notifier.openChat = ChatRef(profileId, _chat);
-    receive(0, utf8.encode('seen'));
+    receive(FriendNumber(0), utf8.encode('seen'));
     await _settle();
     notifier.openChat = null;
-    receive(0, utf8.encode('Grüße ✓'));
+    receive(FriendNumber(0), utf8.encode('Grüße ✓'));
     await _settle();
 
     expect(
@@ -398,27 +515,26 @@ void main() {
     );
     await _settle();
     expect((await account()).setting<Mute>(scope), isNotNull);
-    receive(0, utf8.encode('Me: quiet'));
+    receive(FriendNumber(0), utf8.encode('Me: quiet'));
     await _settle();
     await db.addIntent(
       profileId,
       ClearSetting(scope: scope, kind: Setting.muteKind),
     );
     await _settle();
-    receive(0, utf8.encode('loud'));
+    receive(FriendNumber(0), utf8.encode('loud'));
     await _settle();
     expect(shown, [(ChatRef(profileId, _chat), null, 'loud', 'Me')]);
   });
 
-  test('keeps resends a format knows, which count and notify once', () async {
+  test('keeps the bytes, and notifies the text a format reads', () async {
     await want();
     sync.start();
     await _until(() => tox.friends.isNotEmpty);
 
     final hi = FakeMessageFormat.encode('hi', '1');
-    receive(0, hi);
-    receive(0, hi);
-    receive(0, utf8.encode('plain'));
+    receive(FriendNumber(0), hi);
+    receive(FriendNumber(0), utf8.encode('plain'));
     await _settle();
 
     expect(
@@ -426,11 +542,7 @@ void main() {
         for (final content in await contents(_chat))
           (content as Received).message,
       ],
-      [hi, hi, utf8.encode('plain')],
-    );
-    expect(
-      (await db.watchReceivedRanks(profileId, withFakeFormat).first)[_chat],
-      hasLength(2),
+      [hi, utf8.encode('plain')],
     );
     expect([for (final s in shown) s.$3], ['hi', 'plain']);
   });
@@ -440,8 +552,8 @@ void main() {
     sync.start();
     await _until(() => tox.friends.isNotEmpty);
 
-    receive(1, utf8.encode('from a stranger'));
-    receive(0, utf8.encode('from a friend'));
+    receive(FriendNumber(1), utf8.encode('from a stranger'));
+    receive(FriendNumber(0), utf8.encode('from a friend'));
     await _settle();
 
     expect(await contents(_chat), hasLength(1));
@@ -453,7 +565,10 @@ void main() {
     await _until(() => tox.friends.isNotEmpty);
 
     sync.handleEvent(
-      ToxEventFriendName(friendNumber: 0, name: utf8.encode('Home')),
+      ToxEventFriendName(
+        friendNumber: FriendNumber(0),
+        name: utf8.encode('Home'),
+      ),
     );
     await _settle();
     expect((await account()).friends[_friend]?.name, 'Home');
@@ -484,6 +599,7 @@ void main() {
     // Declined, it stays declined as their client sends it again.
     await want(wanted: false);
     await _settle();
+    expect(unrequested, [_friend]);
     requested.clear();
     for (final message in ['please add me', 'it is me, Bob']) {
       sync.handleEvent(
@@ -507,39 +623,28 @@ void main() {
     );
     await _settle();
 
-    void offer(int fileNumber, Tox_File_Kind kind) => sync.handleEvent(
+    void offer(FileNumber fileNumber, FileKind kind) => sync.handleEvent(
       ToxEventFileRecv(
-        friendNumber: 0,
+        friendNumber: FriendNumber(0),
         fileNumber: fileNumber,
-        kind: kind.value,
+        kind: FileKind(kind.value),
         fileSize: 10,
         filename: utf8.encode('a.txt'),
       ),
     );
-    offer(0, Tox_File_Kind.TOX_FILE_KIND_STICKER);
-    offer(1, Tox_File_Kind.TOX_FILE_KIND_DATA);
+    offer(FileNumber(0), FileKind.sticker);
+    offer(FileNumber(1), FileKind.data);
     final offered = await db
         .watchTransfers(profileId)
         .firstWhere((transfers) => transfers.isNotEmpty);
     expect(offered.single.state, FileState.offered);
     expect(shown, [(ChatRef(profileId, _chat), null, '📎 a.txt', 'Me')]);
-    expect(
-      (await db
-          .watchReceivedRanks(profileId, MessageFormats.none)
-          .first)[_chat],
-      hasLength(1),
-    );
-    expect(tox.fileControls, [
-      (0, 0, Tox_File_Control.TOX_FILE_CONTROL_CANCEL),
-    ]);
+    expect((await db.watchReceivedRanks(profileId).first)[_chat], hasLength(1));
+    expect(tox.fileControls, [(0, 0, FileControl.cancel)]);
 
     await db.setTransferState(offered.single.id, FileState.cancelled);
     await _until(() => tox.fileControls.length == 2);
-    expect(tox.fileControls.last, (
-      0,
-      1,
-      Tox_File_Control.TOX_FILE_CONTROL_CANCEL,
-    ));
+    expect(tox.fileControls.last, (0, 1, FileControl.cancel));
     await _settle();
     expect(await contents(_chat), [
       isA<FileStarted>(),
@@ -554,11 +659,11 @@ void main() {
     final bytes = Uint8List.fromList([1, 2, 3]);
     final blob = BlobId(Uint8List.fromList(sha256.convert(bytes).bytes));
     tox.fileIds[(0, 0)] = blob.bytes;
-    void offer(int fileNumber, int size) => sync.handleEvent(
+    void offer(FileNumber fileNumber, int size) => sync.handleEvent(
       ToxEventFileRecv(
-        friendNumber: 0,
+        friendNumber: FriendNumber(0),
         fileNumber: fileNumber,
-        kind: Tox_File_Kind.TOX_FILE_KIND_AVATAR.value,
+        kind: FileKind.avatar,
         fileSize: size,
         filename: Uint8List(0),
       ),
@@ -569,18 +674,14 @@ void main() {
         .firstOrNull
         ?.blob;
 
-    offer(0, bytes.length);
+    offer(FileNumber(0), bytes.length);
     await _until(() => tox.fileControls.isNotEmpty);
-    expect(tox.fileControls.single, (
-      0,
-      0,
-      Tox_File_Control.TOX_FILE_CONTROL_RESUME,
-    ));
+    expect(tox.fileControls.single, (0, 0, FileControl.resume));
     for (final data in [bytes, Uint8List(0)]) {
       sync.handleEvent(
         ToxEventFileRecvChunk(
-          friendNumber: 0,
-          fileNumber: 0,
+          friendNumber: FriendNumber(0),
+          fileNumber: FileNumber(0),
           position: 0,
           data: data,
         ),
@@ -590,15 +691,11 @@ void main() {
     expect(await db.getAvatar(profileId, blob), bytes);
     expect(avatar(await account()), blob);
 
-    offer(1, 0);
+    offer(FileNumber(1), 0);
     await _settle();
     expect(avatar(await account()), isNull);
     expect(await db.getAvatar(profileId, blob), isNull);
-    expect(tox.fileControls.last, (
-      0,
-      1,
-      Tox_File_Control.TOX_FILE_CONTROL_CANCEL,
-    ));
+    expect(tox.fileControls.last, (0, 1, FileControl.cancel));
   });
 
   test('keeps no avatar but the one offered', () async {
@@ -607,42 +704,38 @@ void main() {
     await _until(() => tox.friends.isNotEmpty);
     final bytes = Uint8List.fromList([1, 2, 3]);
     final blob = BlobId(Uint8List.fromList(sha256.convert(bytes).bytes));
-    void offer(int fileNumber) {
-      tox.fileIds[(0, fileNumber)] = blob.bytes;
+    void offer(FileNumber fileNumber) {
+      tox.fileIds[(0, fileNumber.value)] = blob.bytes;
       sync.handleEvent(
         ToxEventFileRecv(
-          friendNumber: 0,
+          friendNumber: FriendNumber(0),
           fileNumber: fileNumber,
-          kind: Tox_File_Kind.TOX_FILE_KIND_AVATAR.value,
+          kind: FileKind.avatar,
           fileSize: bytes.length,
           filename: Uint8List(0),
         ),
       );
     }
 
-    void chunk(int fileNumber, int position, List<int> data) =>
+    void chunk(FileNumber fileNumber, int position, List<int> data) =>
         sync.handleEvent(
           ToxEventFileRecvChunk(
-            friendNumber: 0,
+            friendNumber: FriendNumber(0),
             fileNumber: fileNumber,
             position: position,
             data: Uint8List.fromList(data),
           ),
         );
 
-    offer(0);
+    offer(FileNumber(0));
     await _until(() => tox.fileControls.length == 1);
-    chunk(0, 0, [3, 2, 1]);
-    chunk(0, 3, []);
-    offer(1);
+    chunk(FileNumber(0), 0, [3, 2, 1]);
+    chunk(FileNumber(0), 3, []);
+    offer(FileNumber(1));
     await _until(() => tox.fileControls.length == 2);
-    chunk(1, 1, bytes);
+    chunk(FileNumber(1), 1, bytes);
     await _settle();
-    expect(tox.fileControls.last, (
-      0,
-      1,
-      Tox_File_Control.TOX_FILE_CONTROL_CANCEL,
-    ));
+    expect(tox.fileControls.last, (0, 1, FileControl.cancel));
     expect(await db.getAvatar(profileId, blob), isNull);
   });
 
@@ -654,7 +747,7 @@ void main() {
     await want();
     sync.start();
     await _until(() => tox.friends.isNotEmpty);
-    setOnline(0, true);
+    setOnline(FriendNumber(0), true);
     await _until(() => tox.fileSends.isNotEmpty);
     expect(tox.fileSends.single, (
       0,
@@ -662,12 +755,12 @@ void main() {
       '${hex.encode(blob.bytes)}.png',
     ));
     final (kind, fileId) = tox.fileSendKinds.single;
-    expect(kind, Tox_File_Kind.TOX_FILE_KIND_AVATAR.value);
-    expect(fileId, blob.bytes);
+    expect(kind, FileKind.avatar);
+    expect(fileId?.bytes, blob.bytes);
     sync.handleEvent(
       ToxEventFileChunkRequest(
-        friendNumber: 0,
-        fileNumber: 0,
+        friendNumber: FriendNumber(0),
+        fileNumber: FileNumber(0),
         position: 0,
         length: bytes.length,
       ),
@@ -676,15 +769,15 @@ void main() {
 
     sync.handleEvent(
       const ToxEventFileRecvControl(
-        friendNumber: 0,
-        fileNumber: 0,
-        control: Tox_File_Control.TOX_FILE_CONTROL_CANCEL,
+        friendNumber: FriendNumber(0),
+        fileNumber: FileNumber(0),
+        control: FileControl.cancel,
       ),
     );
     sync.handleEvent(
       ToxEventFileChunkRequest(
-        friendNumber: 0,
-        fileNumber: 0,
+        friendNumber: FriendNumber(0),
+        fileNumber: FileNumber(0),
         position: 0,
         length: bytes.length,
       ),

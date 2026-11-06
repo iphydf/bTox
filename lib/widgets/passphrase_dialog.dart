@@ -1,7 +1,7 @@
-import 'package:btox/api/toxcore/tox.dart';
 import 'package:btox/l10n/generated/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
+import 'package:toxcore/tox.dart';
 
 /// Asks for a passphrase until [run] accepts it. Where [optional], it may be
 /// empty.

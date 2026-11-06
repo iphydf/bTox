@@ -1,12 +1,12 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_constants.dart';
-import 'package:btox/models/bytes.dart';
-import 'package:btox/packets/messagepack.dart';
 import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
+import 'package:toxcore/bytes.dart';
+import 'package:toxcore/crypto.dart';
+
+export 'package:toxcore/crypto.dart';
 
 // The length of a SHA-256 hash, which names events, graphs and heads.
 const _hashLength = 32;
@@ -42,60 +42,6 @@ final class HexConverter<T extends CryptoBytes> extends TypeConverter<T, String>
   String toSql(T value) => toJson(value);
 }
 
-final class PublicKey extends CryptoBytes implements Comparable<PublicKey> {
-  static const kLength = 32;
-
-  PublicKey(super.bytes);
-
-  factory PublicKey.fromJson(String value) =>
-      PublicKey(Uint8List.fromList(hex.decode(value)));
-
-  factory PublicKey.unpack(Unpacker unpacker) =>
-      PublicKey(unpacker.unpackBinary()!);
-
-  @override
-  int get length => PublicKey.kLength;
-
-  @override
-  int compareTo(PublicKey other) => _compareBytes(bytes, other.bytes);
-}
-
-final class SecretKey extends CryptoBytes {
-  static const kLength = 32;
-
-  SecretKey(super.bytes);
-
-  factory SecretKey.fromJson(String value) =>
-      SecretKey(Uint8List.fromList(hex.decode(value)));
-
-  @override
-  int get length => SecretKey.kLength;
-}
-
-final class GroupChatId extends CryptoBytes {
-  GroupChatId(super.bytes);
-
-  @override
-  int get length => toxGroupChatIdSize;
-}
-
-final class ConferenceId extends CryptoBytes {
-  ConferenceId(super.bytes);
-
-  @override
-  int get length => toxConferenceIdSize;
-}
-
-final class FileId extends CryptoBytes {
-  FileId(super.bytes);
-
-  factory FileId.fromJson(String value) =>
-      FileId(Uint8List.fromList(hex.decode(value)));
-
-  @override
-  int get length => toxFileIdLength;
-}
-
 /// A file's bytes, named by their SHA-256.
 final class BlobId extends CryptoBytes {
   BlobId(super.bytes);
@@ -120,7 +66,7 @@ final class EventId extends CryptoBytes implements Comparable<EventId> {
   int get length => _hashLength;
 
   @override
-  int compareTo(EventId other) => _compareBytes(bytes, other.bytes);
+  int compareTo(EventId other) => compareBytes(bytes, other.bytes);
 }
 
 final class GraphId extends CryptoBytes {
@@ -157,7 +103,7 @@ final class HeadsDigest extends CryptoBytes {
 
   factory HeadsDigest.of(Iterable<EventId> heads) {
     final sorted = heads.map((head) => head.bytes).toList()
-      ..sort(_compareBytes);
+      ..sort(compareBytes);
     return HeadsDigest(
       Uint8List.fromList(
         sha256.convert(sorted.expand((b) => b).toList()).bytes,
@@ -167,109 +113,4 @@ final class HeadsDigest extends CryptoBytes {
 
   @override
   int get length => _hashLength;
-}
-
-int _compareBytes(Uint8List a, Uint8List b) {
-  for (var i = 0; i < a.length && i < b.length; i++) {
-    if (a[i] != b[i]) {
-      return a[i] - b[i];
-    }
-  }
-  return a.length - b.length;
-}
-
-final class ToxAddress extends CryptoBytes {
-  static const kLength = 38;
-  static const kChecksumLength = 2;
-
-  ToxAddress(super.bytes);
-
-  factory ToxAddress.fromString(String value) =>
-      ToxAddress(Uint8List.fromList(hex.decode(value)));
-
-  factory ToxAddress.of(PublicKey publicKey, ToxAddressNospam nospam) {
-    final bytes = Uint8List(kLength)..setAll(0, publicKey.bytes);
-    bytes.buffer.asByteData().setUint32(PublicKey.kLength, nospam.value);
-    bytes.setAll(kLength - kChecksumLength, _checksum(bytes));
-    return ToxAddress(bytes);
-  }
-
-  bool get hasValidChecksum {
-    final checksum = _checksum(bytes);
-    final end = kLength - kChecksumLength;
-    return bytes[end] == checksum[0] && bytes[end + 1] == checksum[1];
-  }
-
-  static List<int> _checksum(Uint8List bytes) {
-    final checksum = [0, 0];
-    for (var i = 0; i < PublicKey.kLength + ToxAddressNospam.kLength; i++) {
-      checksum[i % 2] ^= bytes[i];
-    }
-    return checksum;
-  }
-
-  @override
-  int get length => ToxAddress.kLength;
-  ToxAddressNospam get nospam => ToxAddressNospam(
-    ByteData.sublistView(bytes).getUint32(PublicKey.kLength),
-  );
-  PublicKey get publicKey =>
-      PublicKey(Uint8List.sublistView(bytes, 0, PublicKey.kLength));
-}
-
-final class ToxAddressNospam {
-  static const kLength = 4;
-
-  final int value;
-
-  ToxAddressNospam(this.value) {
-    if (value < 0 || value > 0xFFFFFFFF) {
-      throw ArgumentError('Nospam must be a 32-bit unsigned integer');
-    }
-  }
-
-  @override
-  int get hashCode => value;
-
-  @override
-  bool operator ==(Object other) =>
-      other is ToxAddressNospam && other.value == value;
-
-  @override
-  String toString() => 'ToxAddressNospam($value)';
-}
-
-sealed class CryptoBytes {
-  Uint8List _bytes;
-
-  CryptoBytes(Uint8List bytes) : _bytes = bytes.asUnmodifiableView() {
-    if (_bytes.length != length) {
-      throw ArgumentError('Invalid $runtimeType length: ${_bytes.length}');
-    }
-  }
-
-  Uint8List get bytes => _bytes;
-
-  // They're map keys everywhere, and never change.
-  @override
-  late final int hashCode = memHash(_bytes);
-
-  int get length;
-
-  @override
-  bool operator ==(Object other) {
-    if (other is CryptoBytes &&
-        other.runtimeType == runtimeType &&
-        memEquals(_bytes, other._bytes)) {
-      // Speed up future comparisons by making equality a pointer comparison.
-      _bytes = other._bytes;
-      return true;
-    }
-    return false;
-  }
-
-  String toJson() => hex.encode(_bytes).toUpperCase();
-
-  @override
-  String toString() => '$runtimeType(${toJson()})';
 }

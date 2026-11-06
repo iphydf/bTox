@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
-import 'package:btox/packets/messagepack/packer.dart';
-import 'package:btox/packets/messagepack/unpacker.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/messagepack/packer.dart';
+import 'package:toxcore/messagepack/unpacker.dart';
 
 void main() {
   group('Unpacker', () {

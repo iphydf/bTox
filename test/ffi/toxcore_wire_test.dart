@@ -3,14 +3,15 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_events.dart';
-import 'package:btox/api/toxcore/tox_options.dart';
-import 'package:btox/ffi/generated/toxcore.ffi.dart' as gen;
-import 'package:btox/ffi/tox_library.ffi.dart' as tox_lib;
-import 'package:btox/ffi/toxcore.dart' show Toxcore;
 import 'package:btox/models/crypto.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/ffi/generated/toxcore.ffi.dart' as gen;
+import 'package:toxcore/ffi/tox_library.ffi.dart' as tox_lib;
+import 'package:toxcore/ffi/toxcore.dart' show Toxcore;
+import 'package:toxcore/tox_events.dart';
+import 'package:toxcore/tox_ids.dart' show Port;
+import 'package:toxcore/tox_options.dart';
 
 // Events from real toxcore rather than from our own packer.
 void main() {
@@ -27,7 +28,6 @@ void main() {
     f.tox_options_free(options);
     addTearDown(() => f.tox_kill(friend));
 
-    // ignore: argument_type_not_assignable
     final tox = Toxcore(lib, const ToxOptions(localDiscoveryEnabled: false));
     addTearDown(tox.kill);
     expect(
@@ -69,7 +69,7 @@ void main() {
 
     tox.bootstrap(
       '127.0.0.1',
-      f.tox_self_get_udp_port(friend, err),
+      Port(f.tox_self_get_udp_port(friend, err)),
       PublicKey(read((ptr) => f.tox_self_get_dht_id(friend, ptr))),
     );
     final friendKey = PublicKey(

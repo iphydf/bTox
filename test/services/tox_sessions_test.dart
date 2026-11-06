@@ -1,17 +1,10 @@
-// The analyzer resolves ToxLibrary's conditional export to the stub.
-// ignore_for_file: argument_type_not_assignable
-
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox_options.dart';
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/generated/toxcore.ffi.dart' as gen;
-import 'package:btox/ffi/tox_library.ffi.dart' as tox_lib;
-import 'package:btox/ffi/toxcore.dart' show Tox_Savedata_Type, Toxcore;
 import 'package:btox/models/bootstrap_nodes.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
@@ -21,6 +14,7 @@ import 'package:btox/providers/attachments.dart';
 import 'package:btox/providers/bootstrap_nodes.dart';
 import 'package:btox/providers/database.dart';
 import 'package:btox/providers/tox.dart';
+import 'package:btox/providers/tox_library.dart';
 import 'package:btox/services/tox_session.dart';
 import 'package:btox/sync/account.dart';
 import 'package:btox/sync/event.dart';
@@ -29,6 +23,11 @@ import 'package:drift/native.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:riverpod/riverpod.dart';
+import 'package:toxcore/ffi/generated/toxcore.ffi.dart' as gen;
+import 'package:toxcore/ffi/tox_library.ffi.dart' as tox_lib;
+import 'package:toxcore/ffi/toxcore.dart' show Toxcore;
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_options.dart';
 
 const _timeout = Duration(seconds: 60);
 
@@ -45,10 +44,10 @@ _friends() async {
   final container = ProviderContainer(
     overrides: [
       databaseProvider.overrideWith((ref) => db),
-      tox_lib.toxFfiProvider.overrideWith((ref) => lib),
+      toxFfiProvider.overrideWith((ref) => lib),
       attachmentsDirectoryProvider.overrideWith((ref) => dir.path),
       bootstrapNodesProvider.overrideWith(
-        (ref, network) => Stream.value(const BootstrapNodeList(nodes: [])),
+        (ref) => const BootstrapNodeList(nodes: []),
       ),
     ],
   );
@@ -69,7 +68,7 @@ _friends() async {
         udpEnabled: false,
         localDiscoveryEnabled: false,
         savedata: secretKey.bytes,
-        savedataType: Tox_Savedata_Type.TOX_SAVEDATA_TYPE_SECRET_KEY,
+        savedataType: SavedataType.secretKey,
       ),
     );
     final address = ToxAddress.of(keys.selfGetPublicKey(), nospam);

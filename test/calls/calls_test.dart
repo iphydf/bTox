@@ -2,8 +2,6 @@ import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' show IsolateNameServer;
 
-import 'package:btox/api/toxcore/tox_api.dart' show ApiException;
-import 'package:btox/api/toxcore/tox_av.dart';
 import 'package:btox/calls/android_calls.dart';
 import 'package:btox/calls/call_channel.dart';
 import 'package:btox/calls/call_info.dart';
@@ -13,8 +11,6 @@ import 'package:btox/calls/calls.dart';
 import 'package:btox/calls/plugin_call_media.dart';
 import 'package:btox/calls/relay_protocol.dart';
 import 'package:btox/calls/toxav_protocol.dart';
-import 'package:btox/ffi/toxcore.dart'
-    show Toxav_Call_Control, Toxav_Err_Call, Toxav_Friend_Call_State;
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
@@ -25,6 +21,8 @@ import 'package:btox/sync/session_message.dart';
 import 'package:clock/clock.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/tox.dart';
+import 'package:toxcore/tox_av.dart';
 
 import '../mocks/fake_calls.dart';
 import '../mocks/fake_tox_av.dart';
@@ -384,33 +382,33 @@ void main() {
     final av = FakeToxAv();
     final protocol = ToxavProtocol(
       av,
-      (friend) => friend == _bob ? 3 : null,
+      (friend) => friend == _bob ? const FriendNumber(3) : null,
       (number) => number == 3 ? _bob : null,
     );
     av.events.addAll([
       const AvEvent.call(
-        friendNumber: 3,
+        friendNumber: FriendNumber(3),
         audioEnabled: true,
         videoEnabled: true,
       ),
       AvEvent.callState(
-        friendNumber: 3,
-        state: Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_SENDING_A.value,
+        friendNumber: FriendNumber(3),
+        state: AvFriendCallState.sendingA,
       ),
       AvEvent.audioReceiveFrame(
-        friendNumber: 3,
+        friendNumber: FriendNumber(3),
         pcm: Int16List(4),
         sampleCount: 2,
-        channels: 2,
-        samplingRate: 48000,
+        channels: AvChannels(2),
+        samplingRate: AvSamplingRate(48000),
       ),
       AvEvent.callState(
-        friendNumber: 3,
-        state: Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_FINISHED.value,
+        friendNumber: FriendNumber(3),
+        state: AvFriendCallState.finished,
       ),
       // Not a friend's, so declined.
       const AvEvent.call(
-        friendNumber: 9,
+        friendNumber: FriendNumber(9),
         audioEnabled: true,
         videoEnabled: false,
       ),
@@ -427,8 +425,8 @@ void main() {
     // A friend deleted mid-call has no call left to end.
     protocol.hangUp(_carol);
     expect(av.controls, [
-      (9, Toxav_Call_Control.TOXAV_CALL_CONTROL_CANCEL),
-      (3, Toxav_Call_Control.TOXAV_CALL_CONTROL_CANCEL),
+      (9, AvCallControl.cancel),
+      (3, AvCallControl.cancel),
     ]);
   });
 
@@ -436,10 +434,14 @@ void main() {
     final av = FakeToxAv();
     final toHome = <SessionMessage>[];
     const home = 7;
-    final relay = RelayProtocol(av, homeNumber: () => home, toHome: toHome.add);
+    final relay = RelayProtocol(
+      av,
+      homeNumber: () => FriendNumber(home),
+      toHome: toHome.add,
+    );
     Fact call(CallState state) => (Subject.friend(_bob), FactValue.call(state));
     AvEvent homeCalls() => const AvEvent.call(
-      friendNumber: home,
+      friendNumber: FriendNumber(home),
       audioEnabled: true,
       videoEnabled: false,
     );
@@ -454,11 +456,11 @@ void main() {
     av.events.addAll([
       homeCalls(),
       AvEvent.audioReceiveFrame(
-        friendNumber: home,
+        friendNumber: FriendNumber(home),
         pcm: Int16List(2),
         sampleCount: 2,
-        channels: 1,
-        samplingRate: 48000,
+        channels: AvChannels(1),
+        samplingRate: AvSamplingRate(48000),
       ),
     ]);
     expect(relay.poll(), [
@@ -480,17 +482,14 @@ void main() {
     // A call from the home device unasked is declined.
     av.events.add(homeCalls());
     expect(relay.poll(), isEmpty);
-    expect(av.controls.last, (
-      home,
-      Toxav_Call_Control.TOXAV_CALL_CONTROL_CANCEL,
-    ));
+    expect(av.controls.last, (home, AvCallControl.cancel));
   });
 
   test("a linked account's call answered here ends if its home doesn't "
       'connect it', () {
     final relay = RelayProtocol(
       FakeToxAv(),
-      homeNumber: () => 7,
+      homeNumber: () => FriendNumber(7),
       toHome: (_) {},
     );
     Fact call(CallState state) => (Subject.friend(_bob), FactValue.call(state));
@@ -520,10 +519,14 @@ void main() {
     final av = FakeToxAv();
     final toHome = <SessionMessage>[];
     const home = 7;
-    final relay = RelayProtocol(av, homeNumber: () => home, toHome: toHome.add);
+    final relay = RelayProtocol(
+      av,
+      homeNumber: () => FriendNumber(home),
+      toHome: toHome.add,
+    );
     void homeCalls() => av.events.add(
       const AvEvent.call(
-        friendNumber: home,
+        friendNumber: FriendNumber(home),
         audioEnabled: true,
         videoEnabled: false,
       ),
@@ -550,8 +553,8 @@ void main() {
 
     av.events.add(
       AvEvent.callState(
-        friendNumber: home,
-        state: Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_FINISHED.value,
+        friendNumber: FriendNumber(home),
+        state: AvFriendCallState.finished,
       ),
     );
     expect(relay.poll(), [CallSignal.finished(_bob)]);
@@ -565,31 +568,26 @@ void main() {
     ], all: true);
     homeCalls();
     expect(relay.poll(), [CallSignal.ringing(_bob, video: false)]);
-    expect(av.controls.last, (
-      home,
-      Toxav_Call_Control.TOXAV_CALL_CONTROL_CANCEL,
-    ));
+    expect(av.controls.last, (home, AvCallControl.cancel));
   });
 
   test('toxav gives video unpadded, and sends it at the rate loss allows', () {
     final av = FakeToxAv();
     final protocol = ToxavProtocol(
       av,
-      (friend) => friend == _bob ? 3 : null,
+      (friend) => friend == _bob ? const FriendNumber(3) : null,
       (number) => number == 3 ? _bob : null,
     );
     protocol.call(_bob, video: true);
     av.events.addAll([
       AvEvent.callState(
-        friendNumber: 3,
-        state:
-            Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_SENDING_A.value |
-            Toxav_Friend_Call_State.TOXAV_FRIEND_CALL_STATE_SENDING_V.value,
+        friendNumber: FriendNumber(3),
+        state: AvFriendCallState.sendingA | AvFriendCallState.sendingV,
       ),
       AvEvent.videoReceiveFrame(
-        friendNumber: 3,
-        width: 2,
-        height: 2,
+        friendNumber: FriendNumber(3),
+        width: AvWidth(2),
+        height: AvHeight(2),
         y: Uint8List.fromList([1, 2, 9, 9, 3, 4, 9, 9]),
         u: Uint8List.fromList([5, 9]),
         v: Uint8List.fromList([6, 9]),
@@ -599,9 +597,9 @@ void main() {
       ),
       // An odd height, whose last chroma row covers one row of pixels.
       AvEvent.videoReceiveFrame(
-        friendNumber: 3,
-        width: 2,
-        height: 3,
+        friendNumber: FriendNumber(3),
+        width: AvWidth(2),
+        height: AvHeight(3),
         y: Uint8List.fromList([1, 2, 3, 4, 5, 6]),
         u: Uint8List.fromList([7, 10]),
         v: Uint8List.fromList([8, 11]),
@@ -609,7 +607,10 @@ void main() {
         ustride: 1,
         vstride: 1,
       ),
-      const AvEvent.videoBitRate(friendNumber: 3, videoBitRate: 100),
+      const AvEvent.videoBitRate(
+        friendNumber: FriendNumber(3),
+        videoBitRate: AvBitRate(100),
+      ),
     ]);
     expect(protocol.poll(), [
       CallSignal.answered(_bob),
@@ -629,7 +630,7 @@ void main() {
     final av = FakeToxAv();
     final protocol = ToxavProtocol(
       av,
-      (friend) => friend == _bob ? 3 : null,
+      (friend) => friend == _bob ? const FriendNumber(3) : null,
       (number) => number == 3 ? _bob : null,
     );
     var now = DateTime(2026);
@@ -647,9 +648,7 @@ void main() {
     expect(av.videoFrames, [(3, 2, 2)]);
     expect(protocol.ringsElsewhere, isFalse);
 
-    av.error = const ApiException(
-      Toxav_Err_Call.TOXAV_ERR_CALL_FRIEND_NOT_CONNECTED,
-    );
+    av.error = const ApiException(AvCallError.friendNotConnected);
     expect(protocol.call(_bob, video: false), isFalse);
     protocol
       ..sendAudio(_bob, Int16List(callFrameSamples))

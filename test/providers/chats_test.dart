@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/toxcore.dart' show Tox_Message_Type;
 import 'package:btox/models/chat_view.dart';
 import 'package:btox/models/content.dart';
 import 'package:btox/models/crypto.dart';
@@ -21,6 +20,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:riverpod/misc.dart' show ProviderBase;
 import 'package:riverpod/riverpod.dart';
+import 'package:toxcore/tox.dart';
 
 void main() {
   test("a chat that's gone from the list still shows", () {
@@ -70,7 +70,7 @@ void main() {
           Received(
             sender: name,
             message: utf8.encode('hi'),
-            kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+            kind: MessageType.normal,
           ),
         ),
       );
@@ -147,7 +147,7 @@ void main() {
         Received(
           sender: 'Bob',
           message: utf8.encode('hi'),
-          kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+          kind: MessageType.normal,
         ),
       );
       await withClock(
@@ -207,7 +207,7 @@ void main() {
           from: from,
           sender: sender,
           message: utf8.encode(text),
-          kind: Tox_Message_Type.TOX_MESSAGE_TYPE_NORMAL,
+          kind: MessageType.normal,
         ),
       );
     }

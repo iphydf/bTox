@@ -1,8 +1,8 @@
 import 'package:btox/messages/message_format.dart';
-import 'package:btox/messages/message_v3.dart';
+import 'package:btox/messages/text_before_zero.dart';
 
 /// Every message format bTox can read.
-const messageFormats = <MessageFormat>[MessageV3()];
+const messageFormats = <MessageFormat>[TextBeforeZero()];
 
 MessageFormats formatsOn(List<MessageFormat> known, Iterable<String> off) =>
     MessageFormats([

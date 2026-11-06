@@ -9,6 +9,7 @@ import 'package:btox/sync/session.dart' as session;
 import 'package:btox/sync/session_message.dart';
 import 'package:btox/sync/store.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:toxcore/tox_enums.dart';
 
 final _home = PublicKey(Uint8List(32)..fillRange(0, 32, 1));
 final _bob = PublicKey(Uint8List(32)..fillRange(0, 32, 2));
@@ -131,5 +132,39 @@ void main() {
     expect(replica.store.eventsIn(_account), hasLength(1200));
     expect(replica.state.friends[_bob]!.name, '1199');
     expect(rounds, lessThan(10));
+  });
+
+  test('reads a conversation back from its latest page, as far as it goes', () {
+    final home = EventStore();
+    _write(home, _account, WantFriend(pk: _bob));
+    for (var i = 0; i < 120; i++) {
+      _write(
+        home,
+        _chat,
+        Received(
+          sender: 'Bob',
+          message: Uint8List.fromList([i]),
+          kind: MessageType.normal,
+        ),
+      );
+    }
+    final replica = Replica(device: _device, home: _home);
+    _converse(home, replica, [Replica.hello, session.summary(home)]);
+    final held = [replica.store.eventsIn(_chat).length];
+    for (
+      var asked = replica.older(_chat);
+      asked.isNotEmpty;
+      asked = replica.older(_chat)
+    ) {
+      _converse(home, replica, [
+        for (final History(:graph, :before, :limit) in asked.cast<History>())
+          ...session.batches(_history(home, graph, before, limit)),
+      ]);
+      held.add(replica.store.eventsIn(_chat).length);
+    }
+    // The heads, then a page before them at a time.
+    expect(held, [1 + historyPage, 1 + 2 * historyPage, 120]);
+    replica.offline();
+    expect(replica.older(_chat), isEmpty);
   });
 }

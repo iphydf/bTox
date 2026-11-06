@@ -37,6 +37,8 @@ dependencies:
   # Geolocator's own Android part needs Google Play services.
   btox_location:
     path: packages/btox_location
+  toxcore:
+    path: packages/toxcore
   clock: ^1.1.1
   convert: ^3.1.2
   crypto: ^3.0.6
@@ -70,7 +72,8 @@ dependencies:
   flutter_local_notifications: ^22.3.2
   flutter_secure_storage: ^10.3.4
   url_launcher: ^6.3.3
-
+  flutter_image_compress: ^2.5.1
+  image: ^4.12.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -153,32 +156,3 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/custom-fonts/#from-packages
 
-ffigen:
-  output: lib/ffi/generated/toxcore.ffi.dart
-  headers:
-    entry-points:
-      - tools/include/tox/tox.h
-      - tools/include/tox/tox_options.h
-      - tools/include/tox/tox_events.h
-      - tools/include/tox/tox_private.h
-      - tools/include/tox/toxav.h
-      - tools/include/tox/toxencryptsave.h
-    include-directives:
-      # Prevent system headers from being included.
-      - "tools/include/tox/*.h"
-  functions:
-    exclude:
-      - "tox_default_system"
-      - "tox_get_system"
-      - "tox_new_testing"
-      - "tox_events_load"
-      - "tox_events_equal"
-  structs:
-    exclude:
-      - "Tox_System"
-      - "Tox_Options_Testing"
-  name: ToxFfi
-  description: Bindings to TokTok/c-toxcore.
-  silence-enum-warning: true
-  compiler-opts:
-    - "-DTOX_HIDE_DEPRECATED"

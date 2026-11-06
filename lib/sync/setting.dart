@@ -1,7 +1,7 @@
 import 'package:btox/models/crypto.dart';
-import 'package:btox/packets/messagepack.dart';
 import 'package:btox/sync/codec.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:toxcore/messagepack.dart';
 
 export 'package:btox/sync/codec.dart' show Kept;
 

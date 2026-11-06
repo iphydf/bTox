@@ -8,6 +8,7 @@ import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/profile_settings.dart';
 import 'package:btox/sync/event.dart';
+import 'package:btox/sync/fact.dart';
 import 'package:drift/drift.dart';
 
 /// A file transfer's progress. Incoming files start as offered until accepted,
@@ -23,14 +24,6 @@ abstract class AppSettings extends Table {
   // The profile the UI shows.
   IntColumn get currentProfile =>
       integer().map(const IdConverter<Profiles>()).nullable()();
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
-abstract class CachedBootstrapNodes extends Table {
-  IntColumn get id => integer()();
-  TextColumn get json => text()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -61,6 +54,38 @@ abstract class DeletedChats extends Table {
 
   @override
   Set<Column> get primaryKey => {profileId, graph};
+}
+
+/// What this device's Tox needs to join a group again as the same member.
+abstract class GroupMemberships extends Table {
+  IntColumn get profileId =>
+      integer().references(Profiles, #id).map(const IdConverter<Profiles>())();
+  TextColumn get chatId =>
+      text().map(const HexConverter(GroupChatId.fromJson))();
+  TextColumn get selfSecretKey =>
+      text().map(const HexConverter(GroupSecretKey.fromJson))();
+  // Only the founder has it.
+  TextColumn get chatSecretKey =>
+      text().map(const HexConverter(GroupSecretKey.fromJson)).nullable()();
+  TextColumn get privacy => textEnum<Privacy>()();
+  TextColumn get password => text()();
+  // Null until a peer has sent us the group's settings. With it, the group
+  // comes back when no other peer is online.
+  BlobColumn get state => blob().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {profileId, chatId};
+}
+
+/// Parts of our split messages that arrived, so a restart sends the rest.
+abstract class DeliveredParts extends Table {
+  IntColumn get profileId =>
+      integer().references(Profiles, #id).map(const IdConverter<Profiles>())();
+  TextColumn get event => text().map(const HexConverter(EventId.fromJson))();
+  IntColumn get parts => integer()();
+
+  @override
+  Set<Column> get primaryKey => {profileId, event};
 }
 
 /// Files moving between this device's Tox and its attachments directory, by

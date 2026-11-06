@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:btox/db/database.dart';
-import 'package:btox/models/chat_log.dart';
 import 'package:btox/models/crypto.dart';
 import 'package:btox/models/id.dart';
 import 'package:btox/models/persistence.dart';
@@ -22,7 +21,6 @@ final class Home {
   final store = EventStore();
   var state = AccountState.of(const []);
   final _fold = AccountFold();
-  late final earlier = EarlierRepeats(store);
   var _friends = const <GraphId, PublicKey>{};
   late final _writer = EventWriter(
     _db,
@@ -153,6 +151,8 @@ final class Home {
   }
 
   /// Records what Tox says, unless the account knows it already.
+  Future<void> fact(Subject subject, FactValue value) => _fact(subject, value);
+
   Future<void> _fact(Subject subject, FactValue value) => _writer.write(
     account,
     () => state.facts.of(subject).contains(value)
@@ -160,23 +160,28 @@ final class Home {
         : FactContent(subject: subject, value: value),
   );
 
-  /// Returns the files of the chats deleted with friends.
-  Future<List<String>> intents(
+  /// Returns the files of chats deleted with their friends, and the new events
+  /// for Tox to carry out.
+  Future<(List<String>, List<NewEvent>)> intents(
     List<StoredIntent> intents,
     String sender,
   ) async {
     final files = <String>[];
+    final events = <NewEvent>[];
     await _writer.intents(
       intents,
       account,
       (_) => sender,
-      save: (intent, event) async => files.addAll(switch (intent) {
-        StoredIntent(deleteChat: true, content: UnwantFriend(:final pk)) =>
-          await _deleteChat(intent, pk, event),
-        _ => await _db.writeIntent(intent, event),
-      }),
+      save: (intent, event) async {
+        files.addAll(switch (intent) {
+          StoredIntent(deleteChat: true, content: UnwantFriend(:final pk)) =>
+            await _deleteChat(intent, pk, event),
+          _ => await _db.writeIntent(intent, event),
+        });
+        events.add(event);
+      },
     );
-    return files;
+    return (files, events);
   }
 
   /// The chat's next event ranks after everything deleted from it. Returns
@@ -190,7 +195,6 @@ final class Home {
     final next = store.nextRank(chat, minRank: _deleted[chat] ?? 0);
     final files = await _db.writeIntent(intent, event, deleted: (chat, next));
     store.forget(chat);
-    earlier.forget(chat);
     undelivered.removeWhere((id, _) => !store.contains(id));
     _deleted[chat] = next;
     return files;

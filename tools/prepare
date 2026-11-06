@@ -20,7 +20,7 @@ if [ "${RUNNER_OS:-}" != "Windows" ]; then
 fi
 
 if [ "${CPATH:-}" != "" ] || [ "${RUNNER_OS:-}" = "Windows" ]; then
-  dart run ffigen
+  (cd packages/toxcore && dart run ffigen)
   sed \
     -e 's|dart:ffi|package:wasm_ffi/ffi.dart|g' \
     -e 's|ignore_for_file: type=lint|ignore_for_file: type=lint, subtype_of_sealed_class|' \
@@ -28,11 +28,12 @@ if [ "${CPATH:-}" != "" ] || [ "${RUNNER_OS:-}" = "Windows" ]; then
     -e 's|ffi\.Char|ffi.Int8|g' \
     -e 's|ffi\.Size|ffi.Uint32|g' \
     -e 's|ffi\.UnsignedInt|ffi.Uint32|g' \
-    lib/ffi/generated/toxcore.ffi.dart \
-    >lib/ffi/generated/toxcore.js.dart
+    packages/toxcore/lib/ffi/generated/toxcore.ffi.dart \
+    >packages/toxcore/lib/ffi/generated/toxcore.js.dart
 fi
 
-# Generate the database (drift) code.
+# The bindings' event classes (freezed), then the app's own code.
+(cd packages/toxcore && dart run build_runner build --delete-conflicting-outputs)
 dart run build_runner build --delete-conflicting-outputs
 
 # Dump the database schema for migrations. Fails if the schema changed without

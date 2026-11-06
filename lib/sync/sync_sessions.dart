@@ -3,10 +3,8 @@ import 'dart:collection';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:btox/api/toxcore/tox.dart';
 import 'package:btox/attachments/attachments.dart';
 import 'package:btox/db/database.dart';
-import 'package:btox/ffi/toxcore.dart' show Tox_Err_Friend_Custom_Packet;
 import 'package:btox/logger.dart';
 import 'package:btox/messages/message_format.dart';
 import 'package:btox/models/app_defaults.dart';
@@ -27,6 +25,7 @@ import 'package:btox/sync/replica.dart';
 import 'package:btox/sync/session_message.dart';
 import 'package:btox/sync/setting.dart';
 import 'package:clock/clock.dart';
+import 'package:toxcore/tox.dart';
 
 const _logger = Logger(['SyncSessions']);
 
@@ -41,8 +40,8 @@ final class SyncSessions {
   final AvatarFiles _avatars;
   final Id<Profiles> _profileId;
   final Future<String> Function() _directory;
-  final _incoming = <int, Reassembler>{};
-  final _outbox = <int, Queue<Uint8List>>{};
+  final _incoming = <FriendNumber, Reassembler>{};
+  final _outbox = <FriendNumber, Queue<Uint8List>>{};
   Timer? _retry;
 
   /// How friends' messages are read.
@@ -68,7 +67,7 @@ final class SyncSessions {
   var _loaded = false;
   // How far each chat has been notified, once loaded.
   Map<GraphId, int>? _notified;
-  int? _homeFriend;
+  FriendNumber? _homeFriend;
 
   EventWriter? _writer;
   var _intents = const <StoredIntent>[];
@@ -124,13 +123,26 @@ final class SyncSessions {
   LinkedFiles? get files => _files;
 
   /// The home device's friend number, while it's online.
-  int? get homeFriend => _homeFriend;
+  FriendNumber? get homeFriend => _homeFriend;
 
   String? friendName(PublicKey friend) => _replica?.state.friends[friend]?.name;
 
   String get accountName => _replica?.state.name ?? '';
 
   void toHome(SessionMessage message) => _toHome([message]);
+
+  /// Asks the home device for what came before the oldest events held of
+  /// [chat]'s conversations, as the user reads back to them.
+  void wantEarlier(GraphId chat) {
+    if (_replica case final replica?) {
+      _toHome([
+        for (final graph
+            in mergedChats(replica.state)[chat]?.sides.map((s) => s.graph) ??
+                [chat])
+          ...replica.older(graph),
+      ]);
+    }
+  }
 
   /// Larger files of a linked account are fetched when asked for.
   set autoAcceptSize(int size) {
@@ -267,7 +279,7 @@ final class SyncSessions {
     ], () => replica.state);
   }
 
-  void online(int friendNumber, PublicKey publicKey) {
+  void online(FriendNumber friendNumber, PublicKey publicKey) {
     if (publicKey == _home) {
       _homeFriend = friendNumber;
     }
@@ -281,7 +293,7 @@ final class SyncSessions {
     );
   }
 
-  void offline(int friendNumber) {
+  void offline(FriendNumber friendNumber) {
     _incoming.remove(friendNumber);
     _outbox.remove(friendNumber);
     if (friendNumber == _homeFriend) {
@@ -298,7 +310,11 @@ final class SyncSessions {
     onLiveFacts?.call(const [], all: true);
   }
 
-  void received(int friendNumber, PublicKey publicKey, Uint8List packet) {
+  void received(
+    FriendNumber friendNumber,
+    PublicKey publicKey,
+    Uint8List packet,
+  ) {
     final SessionMessage? message;
     try {
       final bytes = (_incoming[friendNumber] ??= Reassembler()).push(packet);
@@ -325,8 +341,10 @@ final class SyncSessions {
     }
     // Its messages can come before Tox reports it online.
     _homeFriend = friendNumber;
-    if (message case FactsUpdate(:final facts, :final all)
-        when replica.inSession) {
+    if (message case FactsUpdate(
+      :final facts,
+      :final all,
+    ) when replica.inSession) {
       _logger.unawaited(
         'save live facts',
         _db.updateLiveFacts(_profileId, facts, all: all),
@@ -390,8 +408,7 @@ final class SyncSessions {
       if (isIncoming(event.content) &&
           event.rank > (replica.state.read[graph]?.$1 ?? -1) &&
           (since == null ? event.time >= pairedAt : event.rank > since) &&
-          !repeats.contains(id) &&
-          !replica.earlier.repeats(id, event, formats)) {
+          !repeats.contains(id)) {
         (unread[graph] ??= []).add(event);
       }
     }
@@ -440,8 +457,10 @@ final class SyncSessions {
     }
     final sides = _sidesOf(mergedChats(replica.state));
     for (final (_, event, _) in added) {
-      if (event.content case ReadUpTo(:final graph, :final rank)
-          when event.graph == replica.account) {
+      if (event.content case ReadUpTo(
+        :final graph,
+        :final rank,
+      ) when event.graph == replica.account) {
         if (notified[graph] case final shown? when rank >= shown) {
           _read?.call(ChatRef(_profileId, sides[graph]?.chat ?? graph));
         }
@@ -466,11 +485,11 @@ final class SyncSessions {
       (Received(:final from?), (final name, final body))
           when bots.contains(from) =>
         (sender: name, text: body, time: time),
-      (Received(from: _?, :final sender), _) => (
-        sender: sender,
-        text: text,
-        time: time,
-      ),
+      (
+        Received(from: _?, :final sender) || ReceivedPrivately(:final sender),
+        _,
+      ) =>
+        (sender: sender, text: text, time: time),
       _ => (sender: null, text: text, time: time),
     };
   }
@@ -530,7 +549,11 @@ final class SyncSessions {
     }
   }
 
-  void _send(int friendNumber, SessionMessage message, {bool first = false}) {
+  void _send(
+    FriendNumber friendNumber,
+    SessionMessage message, {
+    bool first = false,
+  }) {
     final queue = _outbox.putIfAbsent(friendNumber, Queue.new);
     final packets = frames(message.encode());
     if (first) {
@@ -550,12 +573,9 @@ final class SyncSessions {
           _tox.friendSendLosslessPacket(friendNumber, queue.first);
           queue.removeFirst();
         } on ApiException catch (e) {
-          if (e.error ==
-              Tox_Err_Friend_Custom_Packet.TOX_ERR_FRIEND_CUSTOM_PACKET_SENDQ) {
+          if (e.error == FriendCustomPacketError.sendq) {
             _retry ??= Timer(_retryDelay, _flush);
-          } else if (e.error ==
-              Tox_Err_Friend_Custom_Packet
-                  .TOX_ERR_FRIEND_CUSTOM_PACKET_FRIEND_NOT_CONNECTED) {
+          } else if (e.error == FriendCustomPacketError.friendNotConnected) {
             // Replies to messages that came before Tox reported it online,
             // sent once it does.
           } else {
